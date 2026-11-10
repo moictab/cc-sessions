@@ -68,6 +68,9 @@ Un prompt `>_` con tres luces de estado (tu turno, necesita permiso, trabajando)
   | Cerrada | Anillo hueco |
 
   Las animaciones se ven aunque tengas desactivados los efectos de animación de Windows, porque aquí el movimiento es la información. Se pueden apagar en Ajustes → Interfaz → «Animar los indicadores de estado».
+- **Insignias**: cada sesión tiene una insignia de color con sus iniciales (CS, PE…) en la lista, la barra superior y la cuadrícula. Los colores se reparten para que no se repitan (hasta 12); se cambian con clic derecho → Color.
+- **Lista organizada**: las sesiones que te necesitan (un permiso, una pregunta o un turno terminado que aún no has mirado) suben arriba, en «Te necesitan». El resto sigue tus grupos: clic derecho en una sesión → Mover al grupo → Grupo nuevo…, o arrastra sesiones de un grupo a otro. Un clic en la cabecera de un grupo lo pliega (plegado sigue mostrando un punto por sesión), doble clic lo renombra y clic derecho permite reordenarlo o borrarlo. O bien, en Ajustes → Interfaz → Lista de sesiones → Por estado: te necesitan, trabajando, en reposo.
+- **Buscador rápido** (`Ctrl+Shift+K`, o la lupa abajo en la barra lateral): escribe parte de un nombre, sus iniciales, un grupo o una carpeta, y pulsa Enter.
 - **Avisos**: si la ventana no está en primer plano, recibes una notificación de Windows y parpadea la barra de tareas. El título de la ventana y la insignia muestran cuántas sesiones te necesitan. Al hacer clic en la notificación vas a la sesión.
 - **Guardar y restaurar**: al cerrar se guardan las sesiones abiertas, su orden, la vista y la posición de la ventana. Al abrir, cada una se relanza con `claude --resume <id>`. El estado también se guarda continuamente, así que sobrevive a un cierre inesperado.
 - **Sesiones interrumpidas**: si cierras mientras alguna trabaja, la app te avisa. Al volver, esa sesión muestra un aviso con el botón «Pedir que continúe».
@@ -84,8 +87,9 @@ Un prompt `>_` con tres luces de estado (tu turno, necesita permiso, trabajando)
 | Atajo | Acción |
 |---|---|
 | `Ctrl+Shift+N` | Nueva sesión o retomar una conversación |
+| `Ctrl+Shift+K` | Buscar una sesión por nombre, iniciales, grupo o carpeta |
 | `Ctrl+Shift+J` | Ir a la siguiente sesión que te necesita (permiso > pregunta > terminada) |
-| `Ctrl+1` … `Ctrl+9` | Ir a la sesión N |
+| `Ctrl+1` … `Ctrl+9` | Ir a la sesión N (el número de su fila) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Sesión siguiente / anterior |
 | `Ctrl+Shift+G` | Alternar entre una y cuadrícula |
 | `Ctrl+Shift+M` | Panel de mensajes entre sesiones |
@@ -99,7 +103,7 @@ Un prompt `>_` con tres luces de estado (tu turno, necesita permiso, trabajando)
 
 Arriba a la derecha de cada sesión: plugins de la sesión (pieza de puzle), reiniciar (flecha circular) y quitar (✕).
 
-Doble clic en el nombre para renombrar; si renombras desde Claude con `/rename`, la app también lo recoge. Arrastra en la lista para reordenar.
+Clic derecho en una sesión de la lista para su color, grupo, renombrar, reiniciar y quitar. Doble clic en el nombre para renombrar; si renombras desde Claude con `/rename`, la app también lo recoge. Arrastra en la lista para reordenar.
 
 ## Cómo funciona
 
@@ -109,7 +113,7 @@ Doble clic en el nombre para renombrar; si renombras desde Claude con `/rename`,
 - **Respaldo**: la app también vigila `~/.claude/sessions/<pid>.json`, el registro donde cada sesión de Claude publica si está `busy` o `idle` (y su nombre). Sirve para corregir el estado si se pierde un hook (por ejemplo, si rechazas un permiso), para seguir los `/rename` y para detectar sesiones abiertas fuera de la app. Es un formato interno de Claude Code, así que solo se usa como señal secundaria.
 - **Mensajes**: del lado del remitente, el hook `PostToolUse` de `SendMessage` da el destinatario, el texto y la confirmación de entrega. Del lado del destinatario, el mensaje llega como un `UserPromptSubmit` envuelto en `<cross-session-message from-name="…">`. Cuando los dos extremos están en la app, ambas observaciones se unen en un solo registro que pasa de «en su bandeja» a «leído». Las respuestas suelen ir dirigidas al socket de la sesión (`uds:\\.\pipe\…`) y no a su nombre, así que la app las resuelve con el registro de sesiones. Los mensajes a subagentes dentro de una misma sesión no se registran.
 - **Servidor MCP**: el mismo servidor local atiende un servidor MCP (HTTP, `/mcp/<id>`) que la app añade a cada sesión con `--mcp-config`. No arranca ningún proceso: es una ruta más del servidor de la app. Ofrece la herramienta `set_plugin`, con la que una sesión pide activar o desactivar un plugin solo para sí misma. La app guarda el cambio en el `--settings` de esa sesión (`enabledPlugins`, que tiene prioridad sobre tu configuración y la del proyecto). Cuando el turno termina, la relanza con `--resume` y le escribe una nota para que continúe. Para que no entre en bucle, una sesión puede pedir como mucho 6 reinicios por hora.
-- **Datos guardados**: `%APPDATA%\cc-sessions\state.json` (sesiones, vista y plugins de cada sesión), `settings.json` (Ajustes; un valor `null` significa «el predeterminado») y `messages.json` (los últimos 500 mensajes). Con la variable `CC_SESSIONS_USER_DATA` se puede usar otra carpeta, por ejemplo para pruebas. `CC_SESSIONS_CLAUDE=<ruta>` elige el ejecutable de `claude`. Con `CC_SESSIONS_HOOK_LOG=<archivo>` se vuelcan todos los eventos de hooks, como ayuda para depurar. Ese archivo guarda en texto plano tus prompts, los comandos y lo que devuelven las herramientas: no lo compartas.
+- **Datos guardados**: `%APPDATA%\cc-sessions\state.json` (sesiones con su color, grupo y plugins, los grupos, la vista), `settings.json` (Ajustes; un valor `null` significa «el predeterminado») y `messages.json` (los últimos 500 mensajes). Con la variable `CC_SESSIONS_USER_DATA` se puede usar otra carpeta, por ejemplo para pruebas. `CC_SESSIONS_CLAUDE=<ruta>` elige el ejecutable de `claude`. Con `CC_SESSIONS_HOOK_LOG=<archivo>` se vuelcan todos los eventos de hooks, como ayuda para depurar. Ese archivo guarda en texto plano tus prompts, los comandos y lo que devuelven las herramientas: no lo compartas.
 
 ## Limitaciones
 

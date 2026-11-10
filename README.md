@@ -70,6 +70,9 @@ A `>_` prompt with three status lights (your turn, needs permission, working), i
   | Closed | Hollow ring |
 
   The animations play even if Windows animation effects are turned off, because here the motion is the information. You can turn them off in Settings → Interface → "Animate the status indicators".
+- **Badges**: each session has a colored badge with its initials (CS, PE…) in the list, the top bar and the grid. Colors are handed out so they don't repeat (up to 12); change one with right-click → Color.
+- **An organized list**: the sessions that need you (a permission, a question, or a finished turn you haven't looked at) go to the top, under "Needs you". The rest follow your groups: right-click a session → Move to group → New group…, or drag sessions between groups. Click a group's header to fold it (a folded group still shows one dot per session), double-click it to rename it, right-click it to reorder or delete it. Or, in Settings → Interface → Session list → By status: needs you, working, idle.
+- **Quick switcher** (`Ctrl+Shift+K`, or the magnifier at the bottom of the sidebar): type part of a name, its initials, a group or a folder, and press Enter.
 - **Alerts**: when the window isn't in the foreground you get a Windows notification and the taskbar button flashes. The window title and the badge show how many sessions need you. Clicking the notification takes you to the session.
 - **Save and restore**: on close, the open sessions are saved along with their order, the view and the window position. On open, each one is relaunched with `claude --resume <id>`. The state is also saved continuously, so it survives a crash.
 - **Interrupted sessions**: if you close while one is working, the app warns you. When you come back, that session shows a notice with an "Ask it to continue" button.
@@ -86,8 +89,9 @@ A `>_` prompt with three status lights (your turn, needs permission, working), i
 | Shortcut | Action |
 |---|---|
 | `Ctrl+Shift+N` | New session or resume a conversation |
+| `Ctrl+Shift+K` | Find a session by name, initials, group or folder |
 | `Ctrl+Shift+J` | Go to the next session that needs you (permission > question > finished) |
-| `Ctrl+1` … `Ctrl+9` | Go to session N |
+| `Ctrl+1` … `Ctrl+9` | Go to session N (the number on its row) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session |
 | `Ctrl+Shift+G` | Toggle single / grid |
 | `Ctrl+Shift+M` | Messages between sessions |
@@ -101,7 +105,7 @@ A `>_` prompt with three status lights (your turn, needs permission, working), i
 
 At the top right of each session: the session's plugins (puzzle piece), restart (circular arrow) and remove (✕).
 
-Double-click the name to rename it; if you rename it from Claude with `/rename`, the app picks that up too. Drag in the list to reorder.
+Right-click a session in the list for its color, group, rename, restart and remove. Double-click the name to rename it; if you rename it from Claude with `/rename`, the app picks that up too. Drag in the list to reorder.
 
 ## How it works
 
@@ -111,7 +115,7 @@ Double-click the name to rename it; if you rename it from Claude with `/rename`,
 - **Fallback**: the app also watches `~/.claude/sessions/<pid>.json`, the registry where each Claude session publishes whether it's `busy` or `idle` (and its name). It's used to correct the status if a hook is missed (for example when you deny a permission), to follow `/rename`, and to detect sessions open outside the app. It's an internal Claude Code format, so it's only a secondary signal.
 - **Messages**: on the sender's side, the `PostToolUse` hook for `SendMessage` gives the recipient, the text and the delivery confirmation. On the recipient's side, the message arrives as a `UserPromptSubmit` wrapped in `<cross-session-message from-name="…">`. When both ends are in the app, the two observations are merged into one record that goes from "in their inbox" to "read". Replies are usually addressed to the session's socket (`uds:\\.\pipe\…`) rather than its name, so the app resolves them through the session registry. Messages to subagents within the same session aren't logged.
 - **MCP server**: the same local server also serves an MCP server (HTTP, `/mcp/<id>`) that the app adds to every session with `--mcp-config`. It doesn't start any process: it's just another route on the app's server. It offers the `set_plugin` tool, which a session uses to turn a plugin on or off for itself only. The app stores the change in that session's `--settings` (`enabledPlugins`, which takes precedence over your settings and the project's). When the turn ends it relaunches the session with `--resume` and types a note so it carries on. To keep a confused session from looping, each one can ask for at most 6 restarts per hour.
-- **Saved data**: `%APPDATA%\cc-sessions\state.json` (sessions, view and each session's plugins), `settings.json` (Settings; `null` means "the default") and `messages.json` (the last 500 messages). The `CC_SESSIONS_USER_DATA` variable points the app at another folder, for example for tests. `CC_SESSIONS_CLAUDE=<path>` picks the `claude` executable. `CC_SESSIONS_HOOK_LOG=<file>` dumps every hook event as a debugging aid; that file holds your prompts, the commands and the tools' output in plain text, so don't share it.
+- **Saved data**: `%APPDATA%\cc-sessions\state.json` (sessions with their color, group and plugins, the groups, the view), `settings.json` (Settings; `null` means "the default") and `messages.json` (the last 500 messages). The `CC_SESSIONS_USER_DATA` variable points the app at another folder, for example for tests. `CC_SESSIONS_CLAUDE=<path>` picks the `claude` executable. `CC_SESSIONS_HOOK_LOG=<file>` dumps every hook event as a debugging aid; that file holds your prompts, the commands and the tools' output in plain text, so don't share it.
 
 ## Limitations
 
