@@ -1,0 +1,491 @@
+'use strict';
+// Interface text in every language the app speaks. Loaded with require() in the main process
+// and as a plain <script> in the renderer (where it defines window.ccsmI18n).
+// English is the default; a key missing from a table falls back to English, then to the key.
+// Placeholders look like {name}. Plurals get one key per form (…One / …Many).
+
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else root.ccsmI18n = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, () => {
+  const LANGUAGES = [
+    { code: 'en', name: 'English', locale: 'en-US' },
+    { code: 'es', name: 'Español', locale: 'es-ES' },
+  ];
+  const DEFAULT_LANGUAGE = 'en';
+
+  const STRINGS = {
+    en: {
+      // ---- shared
+      'common.cancel': 'Cancel',
+      'common.close': 'Close',
+      'common.closeEsc': 'Close (Esc)',
+      'common.quote': '“{text}”',
+
+      // ---- relative times
+      'time.now': 'now',
+      'time.minutes': '{n} min',
+      'time.hours': '{n} h',
+      'time.days': '{n} d',
+
+      // ---- session status
+      'status.starting': 'Starting…',
+      'status.ready': 'Ready',
+      'status.busy': 'Working',
+      'status.permission': 'Needs permission',
+      'status.input': 'Asking you',
+      'status.done': 'Your turn',
+      'status.interrupted': 'Interrupted',
+      'status.exited': 'Closed',
+      'status.interruptedText': 'was working when you closed the app',
+      'status.lastPrompt': 'last: “{text}”',
+      'status.toUse': 'to use {tool}',
+      'status.pendingRestartShort': 'restart pending',
+      'status.pendingRestartLong': 'will restart when the turn ends to {change}',
+      'status.pendingRestartTitle': 'Will restart when the turn ends to {change}',
+      'status.ended': 'The session ended',
+      'status.endedDetail': 'The session ended · {detail}',
+
+      // ---- status details and errors written by the main process
+      'session.noClaude': 'Couldn’t find the “claude” executable in the PATH',
+      'session.noFolder': 'The folder no longer exists',
+      'session.spawnFailed': 'Couldn’t start: {error}',
+      'session.exitCode': 'Exit code {code}',
+      'session.asking': 'Is asking you a question',
+      'session.plan': 'Has a plan ready for review',
+      'session.waiting': 'Waiting for your answer',
+      'session.messageFrom': 'Message from {name}: {body}',
+      'session.anotherSession': 'another session',
+      'session.closedPeer': 'session already closed',
+      'session.invalidFolder': 'Invalid folder',
+
+      // ---- notes typed into a session after a restart (they show in the conversation)
+      'restartNote.lost': 'background commands, monitors, running subagents and scheduled reminders',
+      'restartNote.why': ' to {change}',
+      'restartNote.bySession': '[CC Sessions] Session restarted{why}, as you asked. The restart closed any background tasks ' +
+        'you had running ({lost}): relaunch the ones that are still needed and carry on with what you were doing.',
+      'restartNote.ownNote': ' Your note before the restart: “{note}”',
+      'restartNote.byUser': '[CC Sessions] The user restarted this session{why}. The restart closed any background tasks ' +
+        'you had running ({lost}). If there were any, tell the user which ones they were and ask whether they want them ' +
+        'relaunched; if there were none, just reply “ok”.',
+
+      // ---- sidebar, top bar and welcome (index.html)
+      'sidebar.newTitle': 'New session (Ctrl+Shift+N)',
+      'sidebar.new': 'New',
+      'sidebar.external': 'In other terminals',
+      'sidebar.view': 'View',
+      'sidebar.singleTitle': 'Single session (Ctrl+Shift+G)',
+      'sidebar.single': 'Single',
+      'sidebar.gridTitle': 'Grid (Ctrl+Shift+G)',
+      'sidebar.grid': 'Grid',
+      'sidebar.messagesTitle': 'Messages between sessions (Ctrl+Shift+M)',
+      'sidebar.settingsTitle': 'Settings (Ctrl+,)',
+      'topbar.rename': 'Double-click to rename',
+      'topbar.openFolder': 'Open folder',
+      'topbar.openPath': 'Open {path}',
+      'topbar.plugins': 'This session’s plugins',
+      'topbar.restart': 'Restart (resumes the same conversation)',
+      'topbar.remove': 'Remove session (the conversation is kept)',
+      'welcome.title': 'All your Claude Code sessions, in one window',
+      'welcome.intro': 'Each session is a real terminal running <code>claude</code>. See at a glance which one is working, ' +
+        'which one needs permission and which one has finished. Everything is saved when you close the app and picks up ' +
+        'right where it left off when you open it again.',
+      'welcome.noClaude': 'Can’t find the <code>claude</code> executable in the PATH.',
+
+      // ---- session pane
+      'banner.text': 'This session was working when you closed the app. The conversation is intact.',
+      'banner.continue': 'Ask it to continue',
+      'banner.continuePrompt': 'continue',
+      'banner.dismiss': 'Dismiss',
+      'exited.resume': 'Resume',
+      'exited.remove': 'Remove',
+
+      // ---- remove / restart
+      'close.title': 'Remove “{name}”',
+      'close.working': 'This session is working or waiting for an answer. It will stop now. The conversation is kept and ' +
+        'you can resume it from “New”.',
+      'close.idle': 'The Claude process is closed. The conversation is kept and you can resume it from “New”.',
+      'close.confirm': 'Remove',
+      'restart.cost': 'The same conversation is resumed, but the process is closed: background tasks are lost (commands, ' +
+        'monitors, running subagents, scheduled reminders) and Remote Control reconnects.',
+      'restart.notify': 'When it’s back, tell the session it was restarted (it will tell you if it had anything running)',
+      'restart.title': 'Restart “{name}”',
+      'restart.working': 'The session is working: restarting interrupts it.',
+      'restart.confirm': 'Restart',
+
+      // ---- per-session plugins
+      'plugins.title': 'Plugins for “{name}”',
+      'plugins.intro': 'For this session only: it doesn’t change your settings or the project’s. To apply it, the session ' +
+        'restarts and resumes the same conversation. The session itself can also ask for it with its set_plugin tool.',
+      'plugins.none': 'No installed plugin can be turned on per session.',
+      'plugins.on': 'on',
+      'plugins.off': 'off',
+      'plugins.stateOnResume': '{state} · applies when the session is resumed',
+      'plugins.stateAfterRestart': 'now {now} · {next} after the pending restart',
+      'plugins.stateConfigured': '{state} (as in your settings)',
+      'plugins.stateSessionOnly': '{state} (this session only)',
+      'plugins.cancelRestart': 'Cancel the restart',
+      'plugins.pending': 'Restart pending to {change}: it will happen when the turn ends.',
+      'plugins.save': 'Save',
+      'plugins.applyWhenIdle': 'Apply when the turn ends',
+      'plugins.applyRestart': 'Apply and restart',
+      'plugins.turnOn': 'turn on {label}',
+      'plugins.turnOff': 'turn off {label}',
+      'plugins.and': ' and ',
+      'plugins.about.playwright': 'Its own isolated browser (Chromium) for testing websites, e.g. on localhost, without your accounts.',
+
+      // ---- keyboard shortcuts
+      'help.title': 'Keyboard shortcuts',
+      'help.new': 'New session or resume a conversation',
+      'help.attention': 'Go to the next session that needs you',
+      'help.goTo': 'Go to session N',
+      'help.cycle': 'Next session (Shift: previous)',
+      'help.view': 'Toggle single / grid',
+      'help.messages': 'Messages between sessions',
+      'help.remove': 'Remove the current session',
+      'help.copyPaste': 'Copy (with a selection) / paste',
+      'help.rightClickKey': 'Right-click',
+      'help.rightClick': 'Copy the selection or paste',
+      'help.newline': 'New line in the prompt',
+      'help.fontSize': 'Font size (0: Windows Terminal’s)',
+      'help.settings': 'Settings: font and size',
+      'help.renameKey': 'Double-click the name',
+      'help.rename': 'Rename',
+      'help.reorderKey': 'Drag in the list',
+      'help.reorder': 'Reorder',
+
+      // ---- settings
+      'settings.title': 'Settings',
+      'settings.terminal': 'Terminal',
+      'settings.terminalNote': 'Applies to every session right away.',
+      'settings.font': 'Font',
+      'settings.fontSearch': 'Search fonts…',
+      'settings.fontLoading': 'Looking for installed fonts…',
+      'settings.fontsFailed': 'Couldn’t read the installed fonts.',
+      'settings.fontLikeWt': 'Same as Windows Terminal',
+      'settings.fontDefault': 'Default',
+      'settings.fontDefaultList': 'MesloLGS Nerd Font, Cascadia Mono or Consolas',
+      'settings.fontMissing': 'not installed',
+      'settings.fontNoMatch': 'No fonts match',
+      'settings.size': 'Size',
+      'settings.smaller': 'Smaller (Ctrl+-)',
+      'settings.larger': 'Larger (Ctrl+=)',
+      'settings.useWtSize': 'Use Windows Terminal’s',
+      'settings.useDefaultSize': 'Use the default',
+      'settings.sizeFromWt': 'Windows Terminal’s',
+      'settings.sizeDefault': 'default',
+      'settings.previewPrompt': 'Review the tests and fix whatever fails',
+      'settings.previewResult': '✓ 42 passed  ✗ 1 failed',
+      'settings.interface': 'Interface',
+      'settings.language': 'Language',
+      'settings.animations': 'Animate the status indicators',
+
+      // ---- new session
+      'new.title': 'New session',
+      'new.filter': 'Filter projects…',
+      'new.loadingProjects': 'Loading projects…',
+      'new.pickFolder': 'Choose another folder…',
+      'new.pickProject': 'Choose a project',
+      'new.noMatch': 'No projects match',
+      'new.noProjects': 'No recent projects',
+      'new.name': 'Name',
+      'new.newConversation': 'New conversation',
+      'new.resumeHeading': 'Resume a conversation',
+      'new.loading': 'Loading…',
+      'new.noConversations': 'No previous conversations in this folder.',
+      'new.openHere': 'open here',
+      'new.openElsewhere': 'open in another terminal',
+      'new.lastPrompt': 'Last prompt: {text}',
+      'new.elsewhereTitle': 'Open in another terminal',
+      'new.elsewhereMessage': 'This conversation is running outside the app (PID {pid}). If you open it here, two processes ' +
+        'will be writing to the same conversation. Better close it there first.',
+      'new.openAnyway': 'Open anyway',
+      'new.folderDialog': 'Project folder',
+
+      // ---- sessions running outside the app
+      'external.title': 'Open outside the app (PID {pid}). To manage it from here, close it in its terminal and resume it ' +
+        'with “New”.',
+
+      // ---- messages between sessions
+      'messages.heading': 'Messages between sessions',
+      'messages.closeTitle': 'Close (Ctrl+Shift+M)',
+      'messages.filter': 'Filter',
+      'messages.all': 'All',
+      'messages.current': 'Current session',
+      'messages.clearTitle': 'Clear the message log',
+      'messages.clear': 'Clear',
+      'messages.sent': 'In their inbox, unread',
+      'messages.read': 'Read',
+      'messages.received': 'Received',
+      'messages.failed': 'Not delivered',
+      'messages.goTo': 'Go to {name}',
+      'messages.outside': 'Outside the app',
+      'messages.expand': 'Click to expand',
+      'messages.emptySession': 'This session hasn’t sent or received any messages.',
+      'messages.empty': 'Messages your sessions send each other with SendMessage show up here: the ones leaving a session ' +
+        'in the app and the ones reaching it, even if the other end is in another terminal.',
+      'messages.clearConfirmTitle': 'Clear the log',
+      'messages.clearConfirm': 'Deletes this app’s message history. The sessions’ conversations aren’t affected.',
+
+      // ---- main process: notifications, dialogs, shortcut
+      'notify.permission': 'Needs permission',
+      'notify.input': 'Asking you a question',
+      'notify.done': 'Finished: your turn',
+      'quit.workingOne': '1 session is working',
+      'quit.workingMany': '{n} sessions are working',
+      'quit.detail': 'If you close now they’ll be interrupted. The conversations are kept: when you open the app again ' +
+        'I’ll remind you which ones were cut off so you can tell them to continue.',
+      'quit.closeAnyway': 'Close anyway',
+      'app.description': 'Claude Code session manager',
+      'app.startFailed': 'Couldn’t start: {error}',
+    },
+
+    es: {
+      // ---- shared
+      'common.cancel': 'Cancelar',
+      'common.close': 'Cerrar',
+      'common.closeEsc': 'Cerrar (Esc)',
+      'common.quote': '«{text}»',
+
+      // ---- relative times
+      'time.now': 'ahora',
+      'time.minutes': '{n} min',
+      'time.hours': '{n} h',
+      'time.days': '{n} d',
+
+      // ---- session status
+      'status.starting': 'Iniciando…',
+      'status.ready': 'Lista',
+      'status.busy': 'Trabajando',
+      'status.permission': 'Necesita permiso',
+      'status.input': 'Te pregunta',
+      'status.done': 'Tu turno',
+      'status.interrupted': 'Interrumpida',
+      'status.exited': 'Cerrada',
+      'status.interruptedText': 'estaba trabajando cuando cerraste',
+      'status.lastPrompt': 'última: «{text}»',
+      'status.toUse': 'para usar {tool}',
+      'status.pendingRestartShort': 'reinicio pendiente',
+      'status.pendingRestartLong': 'se reiniciará al terminar el turno para {change}',
+      'status.pendingRestartTitle': 'Se reiniciará al terminar el turno para {change}',
+      'status.ended': 'La sesión terminó',
+      'status.endedDetail': 'La sesión terminó · {detail}',
+
+      // ---- status details and errors written by the main process
+      'session.noClaude': 'No se encontró el ejecutable «claude» en el PATH',
+      'session.noFolder': 'La carpeta ya no existe',
+      'session.spawnFailed': 'No se pudo arrancar: {error}',
+      'session.exitCode': 'Código de salida {code}',
+      'session.asking': 'Te está haciendo una pregunta',
+      'session.plan': 'Tiene un plan listo para revisar',
+      'session.waiting': 'Espera tu respuesta',
+      'session.messageFrom': 'Mensaje de {name}: {body}',
+      'session.anotherSession': 'otra sesión',
+      'session.closedPeer': 'sesión ya cerrada',
+      'session.invalidFolder': 'Carpeta no válida',
+
+      // ---- notes typed into a session after a restart (they show in the conversation)
+      'restartNote.lost': 'comandos en segundo plano, monitores, subagentes en curso y recordatorios programados',
+      'restartNote.why': ' para {change}',
+      'restartNote.bySession': '[CC Sessions] Sesión reiniciada{why}, como pediste. El reinicio cerró las tareas en segundo plano ' +
+        'que tuvieras en marcha ({lost}): relanza las que sigan haciendo falta y continúa con lo que estabas haciendo.',
+      'restartNote.ownNote': ' Tu nota antes del reinicio: «{note}»',
+      'restartNote.byUser': '[CC Sessions] El usuario ha reiniciado esta sesión{why}. El reinicio cerró las tareas en segundo plano ' +
+        'que tuvieras en marcha ({lost}). Si había alguna, dile cuáles eran y pregúntale si quiere ' +
+        'relanzarlas; si no había ninguna, responde solo «ok».',
+
+      // ---- sidebar, top bar and welcome (index.html)
+      'sidebar.newTitle': 'Nueva sesión (Ctrl+Shift+N)',
+      'sidebar.new': 'Nueva',
+      'sidebar.external': 'En otras terminales',
+      'sidebar.view': 'Vista',
+      'sidebar.singleTitle': 'Una sesión (Ctrl+Shift+G)',
+      'sidebar.single': 'Una',
+      'sidebar.gridTitle': 'Cuadrícula (Ctrl+Shift+G)',
+      'sidebar.grid': 'Cuadrícula',
+      'sidebar.messagesTitle': 'Mensajes entre sesiones (Ctrl+Shift+M)',
+      'sidebar.settingsTitle': 'Ajustes (Ctrl+,)',
+      'topbar.rename': 'Doble clic para renombrar',
+      'topbar.openFolder': 'Abrir carpeta',
+      'topbar.openPath': 'Abrir {path}',
+      'topbar.plugins': 'Plugins de esta sesión',
+      'topbar.restart': 'Reiniciar (retoma la misma conversación)',
+      'topbar.remove': 'Quitar sesión (la conversación se conserva)',
+      'welcome.title': 'Todas tus sesiones de Claude Code, en una ventana',
+      'welcome.intro': 'Cada sesión es una terminal real con <code>claude</code>. Aquí ves de un vistazo cuál trabaja, ' +
+        'cuál necesita permiso y cuál terminó. Al cerrar se guarda todo y al abrir se retoma tal cual.',
+      'welcome.noClaude': 'No encuentro el ejecutable <code>claude</code> en el PATH.',
+
+      // ---- session pane
+      'banner.text': 'Esta sesión estaba trabajando cuando cerraste la app. La conversación está intacta.',
+      'banner.continue': 'Pedir que continúe',
+      'banner.continuePrompt': 'continúa',
+      'banner.dismiss': 'Descartar',
+      'exited.resume': 'Reanudar',
+      'exited.remove': 'Quitar',
+
+      // ---- remove / restart
+      'close.title': 'Quitar «{name}»',
+      'close.working': 'Esta sesión está trabajando o esperando una respuesta. Se detendrá ahora. La conversación se conserva ' +
+        'y podrás retomarla desde «Nueva».',
+      'close.idle': 'Se cierra el proceso de Claude. La conversación se conserva y podrás retomarla desde «Nueva».',
+      'close.confirm': 'Quitar',
+      'restart.cost': 'Se retoma la misma conversación, pero se cierra el proceso: se pierden las tareas en segundo plano ' +
+        '(comandos, monitores, subagentes en curso, recordatorios programados) y Remote Control se vuelve a conectar.',
+      'restart.notify': 'Al volver, avisar a la sesión de que se reinició (te dirá si tenía algo en marcha)',
+      'restart.title': 'Reiniciar «{name}»',
+      'restart.working': 'La sesión está trabajando: reiniciar la interrumpe.',
+      'restart.confirm': 'Reiniciar',
+
+      // ---- per-session plugins
+      'plugins.title': 'Plugins de «{name}»',
+      'plugins.intro': 'Solo para esta sesión: no cambia tu configuración ni la del proyecto. Para aplicarlo, la sesión se ' +
+        'reinicia y retoma la misma conversación. La propia sesión también puede pedirlo con su herramienta set_plugin.',
+      'plugins.none': 'No hay instalado ningún plugin que se pueda activar por sesión.',
+      'plugins.on': 'activado',
+      'plugins.off': 'desactivado',
+      'plugins.stateOnResume': '{state} · se aplicará al reanudar la sesión',
+      'plugins.stateAfterRestart': 'ahora {now} · {next} tras el reinicio pendiente',
+      'plugins.stateConfigured': '{state} (según tu configuración)',
+      'plugins.stateSessionOnly': '{state} (solo en esta sesión)',
+      'plugins.cancelRestart': 'Cancelar el reinicio',
+      'plugins.pending': 'Reinicio pendiente para {change}: se hará cuando termine el turno.',
+      'plugins.save': 'Guardar',
+      'plugins.applyWhenIdle': 'Aplicar al terminar el turno',
+      'plugins.applyRestart': 'Aplicar y reiniciar',
+      'plugins.turnOn': 'activar {label}',
+      'plugins.turnOff': 'desactivar {label}',
+      'plugins.and': ' y ',
+      'plugins.about.playwright': 'Un navegador propio y aislado (Chromium) para probar webs, por ejemplo en localhost, sin tus cuentas.',
+
+      // ---- keyboard shortcuts
+      'help.title': 'Atajos de teclado',
+      'help.new': 'Nueva sesión o retomar conversación',
+      'help.attention': 'Ir a la siguiente sesión que te necesita',
+      'help.goTo': 'Ir a la sesión N',
+      'help.cycle': 'Sesión siguiente (Shift: anterior)',
+      'help.view': 'Alternar una / cuadrícula',
+      'help.messages': 'Mensajes entre sesiones',
+      'help.remove': 'Quitar la sesión actual',
+      'help.copyPaste': 'Copiar (con selección) / pegar',
+      'help.rightClickKey': 'Clic derecho',
+      'help.rightClick': 'Copiar selección o pegar',
+      'help.newline': 'Salto de línea en el prompt',
+      'help.fontSize': 'Tamaño de letra (0: el de Windows Terminal)',
+      'help.settings': 'Ajustes: tipografía y tamaño',
+      'help.renameKey': 'Doble clic en el nombre',
+      'help.rename': 'Renombrar',
+      'help.reorderKey': 'Arrastrar en la lista',
+      'help.reorder': 'Reordenar',
+
+      // ---- settings
+      'settings.title': 'Ajustes',
+      'settings.terminal': 'Terminal',
+      'settings.terminalNote': 'Se aplica a todas las sesiones al momento.',
+      'settings.font': 'Tipografía',
+      'settings.fontSearch': 'Buscar fuente…',
+      'settings.fontLoading': 'Buscando las fuentes instaladas…',
+      'settings.fontsFailed': 'No he podido leer las fuentes instaladas.',
+      'settings.fontLikeWt': 'Como en Windows Terminal',
+      'settings.fontDefault': 'Predeterminada',
+      'settings.fontDefaultList': 'MesloLGS Nerd Font, Cascadia Mono o Consolas',
+      'settings.fontMissing': 'no está instalada',
+      'settings.fontNoMatch': 'Ninguna fuente coincide',
+      'settings.size': 'Tamaño',
+      'settings.smaller': 'Más pequeña (Ctrl+-)',
+      'settings.larger': 'Más grande (Ctrl+=)',
+      'settings.useWtSize': 'Usar el de Windows Terminal',
+      'settings.useDefaultSize': 'Usar el predeterminado',
+      'settings.sizeFromWt': 'el de Windows Terminal',
+      'settings.sizeDefault': 'predeterminado',
+      'settings.previewPrompt': 'Revisa los tests y arregla lo que falle',
+      'settings.previewResult': '✓ 42 pasan  ✗ 1 falla',
+      'settings.interface': 'Interfaz',
+      'settings.language': 'Idioma',
+      'settings.animations': 'Animar los indicadores de estado',
+
+      // ---- new session
+      'new.title': 'Nueva sesión',
+      'new.filter': 'Filtrar proyectos…',
+      'new.loadingProjects': 'Cargando proyectos…',
+      'new.pickFolder': 'Elegir otra carpeta…',
+      'new.pickProject': 'Elige un proyecto',
+      'new.noMatch': 'Ningún proyecto coincide',
+      'new.noProjects': 'Sin proyectos recientes',
+      'new.name': 'Nombre',
+      'new.newConversation': 'Nueva conversación',
+      'new.resumeHeading': 'Retomar una conversación',
+      'new.loading': 'Cargando…',
+      'new.noConversations': 'No hay conversaciones anteriores en esta carpeta.',
+      'new.openHere': 'abierta aquí',
+      'new.openElsewhere': 'abierta en otra terminal',
+      'new.lastPrompt': 'Último prompt: {text}',
+      'new.elsewhereTitle': 'Abierta en otra terminal',
+      'new.elsewhereMessage': 'Esta conversación está en marcha fuera de la app (PID {pid}). Si la abres aquí habrá dos procesos ' +
+        'escribiendo en la misma conversación. Mejor ciérrala allí primero.',
+      'new.openAnyway': 'Abrir igualmente',
+      'new.folderDialog': 'Carpeta del proyecto',
+
+      // ---- sessions running outside the app
+      'external.title': 'Abierta fuera de la app (PID {pid}). Para gestionarla desde aquí, ciérrala en su terminal y retómala ' +
+        'con «Nueva».',
+
+      // ---- messages between sessions
+      'messages.heading': 'Mensajes entre sesiones',
+      'messages.closeTitle': 'Cerrar (Ctrl+Shift+M)',
+      'messages.filter': 'Filtro',
+      'messages.all': 'Todos',
+      'messages.current': 'Sesión actual',
+      'messages.clearTitle': 'Borrar el registro de mensajes',
+      'messages.clear': 'Vaciar',
+      'messages.sent': 'En su bandeja, sin leer',
+      'messages.read': 'Leído',
+      'messages.received': 'Recibido',
+      'messages.failed': 'No se entregó',
+      'messages.goTo': 'Ir a {name}',
+      'messages.outside': 'Fuera de la app',
+      'messages.expand': 'Clic para desplegar',
+      'messages.emptySession': 'Esta sesión no ha enviado ni recibido mensajes.',
+      'messages.empty': 'Aquí aparecen los mensajes que tus sesiones se envían entre sí con SendMessage: los que salen de una ' +
+        'sesión de la app y los que llegan a ella, aunque el otro extremo esté en otra terminal.',
+      'messages.clearConfirmTitle': 'Vaciar el registro',
+      'messages.clearConfirm': 'Se borra el historial de mensajes de esta app. No afecta a las conversaciones de las sesiones.',
+
+      // ---- main process: notifications, dialogs, shortcut
+      'notify.permission': 'Necesita permiso',
+      'notify.input': 'Te está preguntando',
+      'notify.done': 'Ha terminado: tu turno',
+      'quit.workingOne': 'Hay 1 sesión trabajando',
+      'quit.workingMany': 'Hay {n} sesiones trabajando',
+      'quit.detail': 'Si cierras ahora se interrumpirán. Las conversaciones se conservan: al volver a abrir ' +
+        'te recordaré cuáles se cortaron para que les digas que continúen.',
+      'quit.closeAnyway': 'Cerrar igualmente',
+      'app.description': 'Gestor de sesiones de Claude Code',
+      'app.startFailed': 'No se pudo arrancar: {error}',
+    },
+  };
+
+  /** A supported language code; anything else becomes the default. */
+  function normalize(lang) {
+    return LANGUAGES.some((l) => l.code === lang) ? lang : DEFAULT_LANGUAGE;
+  }
+
+  /** Translator for `lang`: t(key, vars). Also carries t.lang and t.locale (for Intl/toLocale*). */
+  function create(lang) {
+    const code = normalize(lang);
+    const table = STRINGS[code];
+    const t = (key, vars) => {
+      let text = table[key];
+      if (text == null) text = STRINGS[DEFAULT_LANGUAGE][key];
+      if (text == null) return key;
+      if (!vars) return text;
+      return text.replace(/\{(\w+)\}/g, (m, name) => (vars[name] != null ? String(vars[name]) : m));
+    };
+    t.lang = code;
+    t.locale = LANGUAGES.find((l) => l.code === code).locale;
+    return t;
+  }
+
+  return { LANGUAGES, DEFAULT_LANGUAGE, STRINGS, normalize, create };
+});

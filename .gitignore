@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Logs (CCSM_HOOK_LOG dumps hook payloads, prompts included)
+*.log
+*.jsonl
+
+# Build output, if a packager is ever added
+dist/
+out/
+
+# Local secrets and per-machine settings
+.env
+.env.*
+.claude/
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
