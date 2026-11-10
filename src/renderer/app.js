@@ -51,6 +51,13 @@
     fontList: null, // promise of the installed monospace families, loaded once
     modalOnClose: null,
     dragId: null,
+    groups: [], // sidebar groups, in order: [{ id, name, collapsed }]
+    listMode: 'groups', // 'groups' | 'status' (Settings)
+    stickyId: null, // a session you opened from "Needs you" stays there until you leave it
+    heads: new Map(), // section key -> its header row (and 'empty:<group>' placeholders)
+    listDirty: false, // a re-render that waited for a drag or a group rename to finish
+    editingGroup: false,
+    menu: null, // the open context menu
     windowAttended: true,
     messages: [], // newest last, like the main process
     msgOpen: readPref('messagesOpen', false),
@@ -68,6 +75,7 @@
     attn: $('#attn-count'),
     modalRoot: $('#modal-root'),
     tbDot: $('#tb-dot'),
+    tbMono: $('#tb-mono'),
     tbName: $('#tb-name'),
     tbPath: $('#tb-path'),
     tbStatus: $('#tb-status'),
@@ -201,7 +209,6 @@
     const entry = { id: view.id, view, term, fit, pane, item, unseen: false, lastSize: null };
     ui.sessions.set(view.id, entry);
     ui.order.push(view.id);
-    dom.list.appendChild(item);
     dom.stage.appendChild(pane);
 
     term.open($('.term-host', pane));
@@ -212,7 +219,8 @@
     if (pending) { term.write(pending.join('')); ui.pendingData.delete(view.id); }
 
     render(entry);
-    renumber();
+    renderSidebar();
+    syncPanes();
     layout();
     return entry;
   }
@@ -244,6 +252,7 @@
     if (!e) return addSession(view);
     const prev = e.view.status;
     const renamed = e.view.name !== view.name;
+    const regrouped = e.view.group !== view.group;
     e.view = view;
     if (renamed && ui.msgOpen) renderMessages();
     if (view.status !== prev && ATTENTION.has(view.status) && !(view.id === ui.activeId && ui.windowAttended)) {
@@ -251,6 +260,8 @@
     }
     if (!ATTENTION.has(view.status)) e.unseen = false;
     render(e);
+    renderSidebar();
+    if (regrouped) syncPanes();
     updateAttention();
     return e;
   }
@@ -264,13 +275,14 @@
     ui.sessions.delete(id);
     const idx = ui.order.indexOf(id);
     ui.order.splice(idx, 1);
+    if (ui.stickyId === id) ui.stickyId = null;
     if (ui.activeId === id) {
       ui.activeId = null;
       const next = ui.order[Math.min(idx, ui.order.length - 1)];
       if (next) setActive(next);
       else api.setUiState({ activeId: null });
     }
-    renumber();
+    renderSidebar();
     layout();
     updateAttention();
   }
@@ -282,23 +294,26 @@
     li.appendChild(el('span', 'dot'));
     const main = el('div', 'sess-main');
     const row = el('div', 'sess-row');
-    row.append(el('span', 'sess-name'), el('span', 'sess-time'));
+    row.append(el('span', 'mono'), el('span', 'sess-name'), el('span', 'sess-time'));
     main.append(row, el('div', 'sess-path'), el('div', 'sess-detail'));
     li.append(main, el('kbd', 'sess-key'));
 
     li.addEventListener('click', () => setActive(id));
     li.addEventListener('dblclick', () => { setActive(id); startRename(); });
+    li.addEventListener('contextmenu', (ev) => sessionMenu(id, ev));
     li.addEventListener('dragstart', (ev) => {
       ui.dragId = id;
       li.classList.add('dragging');
       ev.dataTransfer.effectAllowed = 'move';
+      ev.dataTransfer.setData('text/plain', id);
     });
     li.addEventListener('dragend', () => {
       ui.dragId = null;
-      for (const x of dom.list.children) x.classList.remove('dragging', 'drop-before', 'drop-after');
+      for (const x of dom.list.children) x.classList.remove('dragging', 'drop-before', 'drop-after', 'drop-into');
+      if (ui.listDirty) renderSidebar();
     });
     li.addEventListener('dragover', (ev) => {
-      if (!ui.dragId || ui.dragId === id) return;
+      if (!canDropBeside(id)) return;
       ev.preventDefault();
       const r = li.getBoundingClientRect();
       const after = ev.clientY > r.top + r.height / 2;
@@ -310,11 +325,7 @@
       ev.preventDefault();
       const after = li.classList.contains('drop-after');
       li.classList.remove('drop-before', 'drop-after');
-      const dragged = ui.dragId;
-      if (!dragged || dragged === id) return;
-      const order = ui.order.filter((x) => x !== dragged);
-      order.splice(order.indexOf(id) + (after ? 1 : 0), 0, dragged);
-      applyOrder(order);
+      if (canDropBeside(id)) moveSession(ui.dragId, { beside: id, after });
     });
     return li;
   }
@@ -324,7 +335,7 @@
     pane.dataset.id = id;
 
     const head = el('div', 'pane-head');
-    head.append(el('span', 'dot'), el('span', 'pane-name'), el('span', 'pane-state'));
+    head.append(el('span', 'dot'), el('span', 'mono'), el('span', 'pane-name'), el('span', 'pane-state'));
     head.addEventListener('click', () => setActive(id));
 
     const banner = el('div', 'pane-banner');
@@ -382,6 +393,8 @@
     e.item.classList.toggle('interrupted', interrupted);
     e.pane.classList.toggle('interrupted', interrupted);
     e.item.title = v.cwd;
+    setBadge($('.sess-row .mono', e.item), v);
+    setBadge($('.pane-head .mono', e.pane), v);
     $('.sess-name', e.item).textContent = v.name;
     $('.sess-time', e.item).textContent = ago(v.statusSince);
     $('.sess-path', e.item).textContent = shortPath(v.cwd);
@@ -410,6 +423,7 @@
     const v = e.view;
     dom.tbDot.dataset.status = v.status;
     dom.tbDot.classList.toggle('interrupted', isInterrupted(v));
+    setBadge(dom.tbMono, v);
     if (!dom.tbName.querySelector('input')) dom.tbName.textContent = v.name;
     dom.tbPath.textContent = shortPath(v.cwd);
     dom.tbPath.title = t('topbar.openPath', { path: v.cwd });
@@ -417,25 +431,28 @@
     dom.tbStatus.replaceChildren(stateLine(v, { long: true }));
   }
 
+  /** Numbers for Ctrl+1…9 follow stableOrder(), so they don't change with the sessions' state. */
   function renumber() {
-    ui.order.forEach((id, i) => {
-      const e = ui.sessions.get(id);
-      const key = $('.sess-key', e.item);
+    stableOrder().forEach((id, i) => {
+      const key = $('.sess-key', ui.sessions.get(id).item);
       key.textContent = i < 9 ? String(i + 1) : '';
       key.hidden = i >= 9;
     });
   }
 
+  /** New manual order (ui.order), saved; the list and the grid follow. */
   function applyOrder(order) {
     ui.order = order;
-    for (const id of order) {
-      const e = ui.sessions.get(id);
-      dom.list.appendChild(e.item);
-      dom.stage.appendChild(e.pane);
-    }
-    renumber();
     api.reorder(order);
-    fitVisible();
+    renderSidebar();
+    syncPanes();
+  }
+
+  /** The grid shows the panes in stableOrder(). Moves only what changed. */
+  function syncPanes() {
+    const panes = stableOrder().map((id) => ui.sessions.get(id).pane);
+    panes.forEach((p, i) => { if (dom.stage.children[i] !== p) dom.stage.insertBefore(p, dom.stage.children[i] || null); });
+    requestAnimationFrame(fitVisible);
   }
 
   function updateAttention() {
@@ -448,11 +465,450 @@
     document.title = n ? `(${n}) CC Sessions` : 'CC Sessions';
   }
 
+  // ---------------------------------------------------------------- session list: badges, sections, groups
+
+  // Same names and order as COLORS in the main process (sessions.js); the CSS draws them.
+  const COLORS = ['blue', 'orange', 'green', 'pink', 'cyan', 'amber', 'violet', 'lime', 'red', 'teal', 'indigo', 'slate'];
+
+  /** Two letters for the badge: the first of the first two words, or the first two letters. */
+  function initials(name) {
+    const words = String(name || '').split(/[\s\-_.\/\\]+/).filter(Boolean);
+    const first = (w) => [...w][0] || '';
+    if (words.length >= 2) return (first(words[0]) + first(words[1])).toUpperCase();
+    const w = words[0] || '?';
+    const caps = w.match(/\p{Lu}/gu); // CamelCase: its capitals
+    return (caps && caps.length >= 2 ? caps[0] + caps[1] : [...w].slice(0, 2).join('')).toUpperCase();
+  }
+
+  function setBadge(node, view) {
+    if (!node) return;
+    node.textContent = initials(view.name);
+    node.dataset.color = COLORS.includes(view.color) ? view.color : COLORS[0];
+  }
+
+  function badge(view) {
+    const b = el('span', 'mono');
+    setBadge(b, view);
+    return b;
+  }
+
+  /** The session's group, if it still exists. */
+  function groupOf(id) {
+    const g = ui.sessions.get(id)?.view.group;
+    return g && ui.groups.some((x) => x.id === g) ? g : null;
+  }
+
+  /**
+   * The order behind the numbers (Ctrl+1…9), Ctrl+Tab and the grid. It doesn't depend on the
+   * sessions' state: by group, your groups in order and then the rest; by status, your order.
+   */
+  function stableOrder() {
+    if (ui.listMode !== 'groups' || !ui.groups.length) return ui.order.slice();
+    const out = [];
+    for (const g of ui.groups) for (const id of ui.order) if (groupOf(id) === g.id) out.push(id);
+    for (const id of ui.order) if (!groupOf(id)) out.push(id);
+    return out;
+  }
+
+  function needsYou(e) {
+    const s = e.view.status;
+    return s === 'permission' || s === 'input' || (s === 'done' && e.unseen) || ui.stickyId === e.id;
+  }
+
+  /** What the list shows: [{ key, title, ids, collapsible, collapsed, group }]. A null title: no header. */
+  function sections() {
+    const entries = stableOrder().map((id) => ui.sessions.get(id));
+    const top = entries.filter(needsYou);
+    const rest = entries.filter((e) => !needsYou(e));
+    const ids = (list) => list.map((e) => e.id);
+    const working = (e) => e.view.status === 'busy' || e.view.status === 'starting';
+    if (ui.listMode === 'status') {
+      return [
+        { key: 'needs', title: t('list.needsYou'), ids: ids(top) },
+        { key: 'working', title: t('list.working'), ids: ids(rest.filter(working)) },
+        { key: 'idle', title: t('list.idle'), ids: ids(rest.filter((e) => !working(e))), collapsible: true, collapsed: readPref('idleCollapsed', false) },
+      ].filter((s) => s.ids.length);
+    }
+    const out = [];
+    if (top.length) out.push({ key: 'needs', title: t('list.needsYou'), ids: ids(top) });
+    for (const g of ui.groups) {
+      out.push({ key: 'g:' + g.id, title: g.name, group: g, ids: ids(rest.filter((e) => groupOf(e.id) === g.id)), collapsible: true, collapsed: g.collapsed });
+    }
+    const loose = ids(rest.filter((e) => !groupOf(e.id)));
+    if (loose.length) {
+      // With no groups the list needs no heading, unless "Needs you" is above it.
+      out.push({ key: 'loose', title: ui.groups.length ? t('list.ungrouped') : top.length ? t('list.others') : null, ids: loose });
+    }
+    return out;
+  }
+
+  /** Lays out the sidebar. Moves only the rows that changed place: re-inserting one restarts its animation. */
+  function renderSidebar() {
+    // Not under a drag or while a group is being renamed: rows would move under the pointer
+    // or the text box would lose focus. Done when that ends.
+    if (ui.dragId || ui.editingGroup) { ui.listDirty = true; return; }
+    ui.listDirty = false;
+    const nodes = [];
+    for (const sec of sections()) {
+      if (sec.title !== null) nodes.push(sectionHead(sec));
+      for (const id of sec.ids) {
+        const e = ui.sessions.get(id);
+        e.item.dataset.section = sec.key;
+        // A folded section still shows the session you're on.
+        if (!sec.collapsed || id === ui.activeId) nodes.push(e.item);
+      }
+      if (sec.group && !sec.ids.length && !sec.collapsed) nodes.push(emptyGroupRow(sec.group));
+    }
+    const list = dom.list;
+    nodes.forEach((n, i) => { if (list.children[i] !== n) list.insertBefore(n, list.children[i] || null); });
+    while (list.children.length > nodes.length) list.lastElementChild.remove();
+    renumber();
+  }
+
+  function sectionHead(sec) {
+    let h = ui.heads.get(sec.key);
+    if (!h) {
+      h = el('li', 'list-head');
+      h.dataset.key = sec.key;
+      h.append(el('span', 'lh-chev'), el('span', 'lh-title'), el('span', 'lh-count'), el('span', 'lh-dots'));
+      h.addEventListener('click', () => toggleSection(sec.key));
+      h.addEventListener('dblclick', () => { if (sec.key.startsWith('g:')) renameGroup(sec.key.slice(2)); });
+      h.addEventListener('contextmenu', (ev) => { if (sec.key.startsWith('g:')) groupMenu(sec.key.slice(2), ev); });
+      dropInto(h, () => (sec.key.startsWith('g:') ? sec.key.slice(2) : sec.key === 'loose' && ui.groups.length ? null : undefined));
+      ui.heads.set(sec.key, h);
+    }
+    h.classList.toggle('collapsible', !!sec.collapsible);
+    h.classList.toggle('collapsed', !!sec.collapsed);
+    h.classList.toggle('is-group', !!sec.group);
+    $('.lh-chev', h).title = sec.collapsible ? t(sec.collapsed ? 'list.expand' : 'list.collapse') : '';
+    const title = $('.lh-title', h);
+    if (!title.querySelector('input')) title.textContent = sec.title;
+    title.title = sec.group ? t('list.renameGroupTitle') : '';
+    $('.lh-count', h).textContent = String(sec.ids.length);
+    // Folded: one small dot per session, so you still see what they're doing.
+    $('.lh-dots', h).replaceChildren(...(sec.collapsed ? sec.ids.map((id) => {
+      const d = el('span', 'mini-dot');
+      d.dataset.status = ui.sessions.get(id).view.status;
+      return d;
+    }) : []));
+    return h;
+  }
+
+  function emptyGroupRow(g) {
+    let row = ui.heads.get('empty:' + g.id);
+    if (!row) {
+      row = el('li', 'list-empty', t('list.empty'));
+      dropInto(row, () => g.id);
+      ui.heads.set('empty:' + g.id, row);
+    }
+    return row;
+  }
+
+  function toggleSection(key) {
+    if (key === 'idle') writePref('idleCollapsed', !readPref('idleCollapsed', false));
+    else if (key.startsWith('g:')) {
+      const g = ui.groups.find((x) => x.id === key.slice(2));
+      if (!g) return;
+      g.collapsed = !g.collapsed;
+      api.saveGroups(ui.groups);
+    } else return;
+    renderSidebar();
+  }
+
+  // ---- drag and drop
+
+  /** Dropping next to a session: not into "Needs you", and by status only within the same section. */
+  function canDropBeside(id) {
+    const dragged = ui.dragId;
+    if (!dragged || dragged === id) return false;
+    const section = ui.sessions.get(id).item.dataset.section;
+    if (section === 'needs') return false;
+    return ui.listMode === 'groups' || ui.sessions.get(dragged).item.dataset.section === section;
+  }
+
+  /** A header or an empty group that takes a dropped session into a group (undefined: not a target). */
+  function dropInto(node, groupFor) {
+    node.addEventListener('dragover', (ev) => {
+      if (!ui.dragId || ui.listMode !== 'groups' || groupFor() === undefined) return;
+      ev.preventDefault();
+      node.classList.add('drop-into');
+    });
+    node.addEventListener('dragleave', () => node.classList.remove('drop-into'));
+    node.addEventListener('drop', (ev) => {
+      node.classList.remove('drop-into');
+      const g = groupFor();
+      if (!ui.dragId || g === undefined) return;
+      ev.preventDefault();
+      moveSession(ui.dragId, { group: g });
+    });
+  }
+
+  /**
+   * Moves a session next to another one (taking its group) or to the end of a group
+   * ({ group: id | null }). By status only the group changes: the order is yours.
+   */
+  function moveSession(id, { beside = null, after = false, group } = {}) {
+    const e = ui.sessions.get(id);
+    if (!e) return;
+    let target = group;
+    if (beside && ui.listMode === 'groups') target = groupOf(beside);
+    if (target !== undefined && target !== groupOf(id)) {
+      e.view = { ...e.view, group: target }; // right away; the main process confirms
+      api.setSessionMeta(id, { group: target });
+    }
+    if (!beside && ui.listMode !== 'groups') { renderSidebar(); return; }
+    const order = ui.order.filter((x) => x !== id);
+    if (beside) order.splice(order.indexOf(beside) + (after ? 1 : 0), 0, id);
+    else {
+      const last = order.filter((x) => groupOf(x) === target).pop();
+      order.splice(last ? order.indexOf(last) + 1 : order.length, 0, id);
+    }
+    applyOrder(order);
+  }
+
+  // ---- groups
+
+  function saveGroups() {
+    api.saveGroups(ui.groups);
+    renderSidebar();
+    syncPanes();
+  }
+
+  /** A new group, optionally with a session in it, and its name ready to type. */
+  function createGroup(withSession) {
+    const g = { id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: t('group.newName'), collapsed: false };
+    ui.groups.push(g);
+    api.saveGroups(ui.groups);
+    if (ui.listMode !== 'groups') { setListMode('groups'); }
+    if (withSession) moveSession(withSession, { group: g.id });
+    else renderSidebar();
+    renameGroup(g.id);
+  }
+
+  function renameGroup(id) {
+    const g = ui.groups.find((x) => x.id === id);
+    const h = ui.heads.get('g:' + id);
+    if (!g || !h || !h.isConnected) return;
+    const title = $('.lh-title', h);
+    if (title.querySelector('input')) return;
+    const input = el('input', 'lh-input');
+    input.value = g.name;
+    input.maxLength = 60;
+    title.replaceChildren(input);
+    ui.editingGroup = true;
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      ui.editingGroup = false;
+      const name = input.value.trim();
+      if (save && name) g.name = name;
+      title.textContent = g.name;
+      saveGroups();
+      focusActive();
+    };
+    for (const type of ['click', 'dblclick', 'mousedown']) input.addEventListener(type, (ev) => ev.stopPropagation());
+    input.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') finish(true);
+      if (ev.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+  }
+
+  function moveGroup(id, step) {
+    const i = ui.groups.findIndex((g) => g.id === id);
+    const j = i + step;
+    if (i < 0 || j < 0 || j >= ui.groups.length) return;
+    [ui.groups[i], ui.groups[j]] = [ui.groups[j], ui.groups[i]];
+    saveGroups();
+  }
+
+  /** Its sessions stay, without a group. */
+  function deleteGroup(id) {
+    ui.groups = ui.groups.filter((g) => g.id !== id);
+    for (const e of ui.sessions.values()) {
+      if (e.view.group === id) { e.view = { ...e.view, group: null }; api.setSessionMeta(e.id, { group: null }); }
+    }
+    ui.heads.delete('g:' + id);
+    ui.heads.delete('empty:' + id);
+    saveGroups();
+  }
+
+  async function setListMode(mode) {
+    ui.listMode = mode === 'status' ? 'status' : 'groups';
+    if (ui.settings.ui.listMode !== ui.listMode) await updateSettings({ ui: { listMode: ui.listMode } });
+    renderSidebar();
+    syncPanes();
+  }
+
+  // ---- context menus
+
+  function closeMenu() {
+    if (!ui.menu) return;
+    ui.menu.remove();
+    ui.menu = null;
+  }
+
+  /** A small menu at the pointer; build(menu) fills it. */
+  function openMenu(ev, build) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    closeMenu();
+    const menu = el('div', 'ctx-menu');
+    menu.setAttribute('role', 'menu');
+    build(menu);
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(ev.clientX, window.innerWidth - r.width - 6)) + 'px';
+    menu.style.top = Math.max(4, Math.min(ev.clientY, window.innerHeight - r.height - 6)) + 'px';
+    ui.menu = menu;
+  }
+
+  function menuItem(label, action, { checked = false, danger = false } = {}) {
+    const b = el('button', 'ctx-item' + (checked ? ' checked' : '') + (danger ? ' danger' : ''), label);
+    b.setAttribute('role', checked ? 'menuitemradio' : 'menuitem');
+    if (checked) b.setAttribute('aria-checked', 'true');
+    b.addEventListener('click', () => { closeMenu(); action(); });
+    return b;
+  }
+
+  const menuLabel = (text) => el('div', 'ctx-label', text);
+  const menuSep = () => el('div', 'ctx-sep');
+
+  document.addEventListener('mousedown', (ev) => { if (ui.menu && !ui.menu.contains(ev.target)) closeMenu(); }, true);
+  window.addEventListener('blur', closeMenu);
+  window.addEventListener('resize', closeMenu);
+
+  function sessionMenu(id, ev) {
+    const e = ui.sessions.get(id);
+    if (!e) return;
+    openMenu(ev, (m) => {
+      m.append(menuLabel(t('menu.color')));
+      const swatches = el('div', 'ctx-swatches');
+      for (const c of COLORS) {
+        const b = el('button', 'swatch' + (e.view.color === c ? ' on' : ''));
+        b.dataset.color = c;
+        b.title = t('menu.colorName', { color: t('color.' + c) });
+        b.setAttribute('aria-label', b.title);
+        b.addEventListener('click', () => { closeMenu(); api.setSessionMeta(id, { color: c }); });
+        swatches.appendChild(b);
+      }
+      m.append(swatches, menuSep(), menuLabel(t('menu.moveTo')));
+      const current = groupOf(id);
+      for (const g of ui.groups) m.append(menuItem(g.name, () => moveSession(id, { group: g.id }), { checked: current === g.id }));
+      if (ui.groups.length) m.append(menuItem(t('menu.noGroup'), () => moveSession(id, { group: null }), { checked: current === null }));
+      m.append(menuItem(t('menu.newGroup'), () => createGroup(id)));
+      m.append(
+        menuSep(),
+        menuItem(t('menu.rename'), () => { setActive(id); startRename(); }),
+        menuItem(t('menu.restart'), () => confirmRestart(id)),
+        menuItem(t('menu.remove'), () => confirmClose(id), { danger: true }),
+      );
+    });
+  }
+
+  function groupMenu(id, ev) {
+    const i = ui.groups.findIndex((g) => g.id === id);
+    if (i < 0) return;
+    openMenu(ev, (m) => {
+      m.append(menuItem(t('menu.renameGroup'), () => renameGroup(id)));
+      if (i > 0) m.append(menuItem(t('menu.moveUp'), () => moveGroup(id, -1)));
+      if (i < ui.groups.length - 1) m.append(menuItem(t('menu.moveDown'), () => moveGroup(id, 1)));
+      m.append(menuSep(), menuItem(t('menu.deleteGroup'), () => deleteGroup(id), { danger: true }));
+    });
+  }
+
+  // ---- quick switcher (Ctrl+Shift+K)
+
+  const fold = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+
+  /** How well a query matches a session (0: not at all): name first, then group and folder. */
+  function matchScore(q, e) {
+    const name = fold(e.view.name);
+    const group = fold(ui.groups.find((g) => g.id === groupOf(e.id))?.name);
+    let s = 0;
+    if (name.startsWith(q)) s = 100;
+    else if (fold(initials(e.view.name)) === q) s = 90;
+    else if (name.split(/[\s\-_.]+/).some((w) => w.startsWith(q))) s = 80;
+    else if (name.includes(q)) s = 60;
+    else if (group && group.includes(q)) s = 50;
+    else if (fold(e.view.cwd).includes(q)) s = 30;
+    else {
+      let i = 0;
+      for (const c of name) if (c === q[i]) i++;
+      if (i === q.length) s = 20; // letters in order: "cgw" -> comfyui-gateway
+    }
+    return s;
+  }
+
+  function openSwitcher() {
+    if (!ui.sessions.size) return;
+    closeMenu();
+    const modal = modalShell('switcher-modal', t('switcher.title'));
+    const body = el('div', 'modal-body switcher-body');
+    const input = el('input', 'switcher-input');
+    input.placeholder = t('switcher.placeholder');
+    input.spellcheck = false;
+    const list = el('ul', 'switcher-list');
+    body.append(input, list, el('div', 'switcher-hint', t('switcher.hint')));
+    modal.appendChild(body);
+
+    let results = [];
+    let sel = 0;
+    const go = (id) => { closeModal(); setActive(id); };
+    const mark = () => {
+      [...list.children].forEach((c, i) => c.classList.toggle('sel', i === sel));
+      list.children[sel]?.scrollIntoView({ block: 'nearest' });
+    };
+    const row = (e, i) => {
+      const li = el('li', 'switcher-row' + (e.id === ui.activeId ? ' current' : ''));
+      const dot = el('span', 'dot');
+      dot.dataset.status = e.view.status;
+      const groupName = ui.groups.find((g) => g.id === groupOf(e.id))?.name;
+      const state = el('span', 'sw-state');
+      state.dataset.status = e.view.status;
+      state.appendChild(el('b', null, describe(e.view).label));
+      li.append(dot, badge(e.view), el('span', 'sw-name', e.view.name), el('span', 'sw-meta', [groupName, shortPath(e.view.cwd)].filter(Boolean).join(' · ')), state);
+      li.addEventListener('mousemove', () => { if (sel !== i) { sel = i; mark(); } });
+      li.addEventListener('click', () => go(e.id));
+      return li;
+    };
+    const draw = () => {
+      const q = fold(input.value.trim());
+      const all = stableOrder().map((id) => ui.sessions.get(id));
+      results = q
+        ? all.map((e, i) => ({ e, s: matchScore(q, e), i })).filter((r) => r.s > 0).sort((a, b) => b.s - a.s || a.i - b.i).map((r) => r.e)
+        : all;
+      sel = Math.min(sel, Math.max(0, results.length - 1));
+      list.replaceChildren(...(results.length ? results.map(row) : [el('li', 'switcher-empty', t('switcher.none'))]));
+      mark();
+    };
+    input.addEventListener('input', () => { sel = 0; draw(); });
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (results.length) { sel = (sel + (ev.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length; mark(); }
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();
+        if (results[sel]) go(results[sel].id);
+      }
+    });
+    openModal(modal);
+    draw();
+    input.focus();
+  }
+
   // ---------------------------------------------------------------- focus & layout
 
   function setActive(id, { focus = true } = {}) {
     const e = ui.sessions.get(id);
     if (!e) return;
+    // Opened while it needed you: it stays under "Needs you" until you move on, so the row
+    // doesn't jump away from under the pointer.
+    ui.stickyId = needsYou(e) ? id : null;
     ui.activeId = id;
     for (const x of ui.sessions.values()) {
       const on = x.id === id;
@@ -460,6 +916,7 @@
       x.item.classList.toggle('active', on);
     }
     if (e.unseen) { e.unseen = false; render(e); }
+    renderSidebar();
     renderTopbar();
     updateAttention();
     if (ui.msgOpen && ui.msgFilter === 'active') renderMessages();
@@ -548,6 +1005,7 @@
     // Windows' "animation effects" switch is ignored on purpose: these indicators are how
     // you see what each session is doing. Settings has its own switch.
     document.body.classList.toggle('no-anim', !ui.settings.ui.animations);
+    ui.listMode = ui.settings.ui.listMode === 'status' ? 'status' : 'groups';
     requestAnimationFrame(fitVisible);
   }
 
@@ -625,22 +1083,28 @@
   }
 
   function cycle(step) {
-    if (!ui.order.length) return;
-    const i = ui.order.indexOf(ui.activeId);
-    setActive(ui.order[(i + step + ui.order.length) % ui.order.length]);
+    const order = stableOrder();
+    if (!order.length) return;
+    const i = order.indexOf(ui.activeId);
+    setActive(order[(i + step + order.length) % order.length]);
   }
 
   /** Next session that needs you: permission > question > finished, starting after the current one. */
   function jumpToAttention() {
     const rank = (e) => (e.view.status === 'permission' ? 0 : e.view.status === 'input' ? 1 : e.unseen || e.view.status === 'done' ? 2 : 9);
-    const start = Math.max(0, ui.order.indexOf(ui.activeId));
-    const rotated = [...ui.order.slice(start + 1), ...ui.order.slice(0, start + 1)].map((id) => ui.sessions.get(id));
+    const order = stableOrder();
+    const start = Math.max(0, order.indexOf(ui.activeId));
+    const rotated = [...order.slice(start + 1), ...order.slice(0, start + 1)].map((id) => ui.sessions.get(id));
     let best = null;
     for (const e of rotated) if (rank(e) < 9 && (!best || rank(e) < rank(best))) best = e;
     if (best) setActive(best.id);
   }
 
   window.addEventListener('keydown', (ev) => {
+    if (ui.menu) {
+      if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closeMenu(); }
+      return;
+    }
     if (dom.modalRoot.firstChild) {
       if (ev.key === 'Escape') { ev.preventDefault(); closeModal(); }
       return;
@@ -653,7 +1117,8 @@
     else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'j') jumpToAttention();
     else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'w') { if (ui.activeId) confirmClose(ui.activeId); }
     else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'm') setMessagesOpen(!ui.msgOpen);
-    else if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && /^[1-9]$/.test(k)) { const id = ui.order[Number(k) - 1]; if (id) setActive(id); }
+    else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'k') openSwitcher();
+    else if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && /^[1-9]$/.test(k)) { const id = stableOrder()[Number(k) - 1]; if (id) setActive(id); }
     else if (ev.ctrlKey && k === 'Tab') cycle(ev.shiftKey ? -1 : 1);
     else if (ev.ctrlKey && !ev.altKey && (k === '+' || k === '=')) setFontSize(ui.font.size + 1);
     else if (ev.ctrlKey && !ev.altKey && k === '-') setFontSize(ui.font.size - 1);
@@ -860,6 +1325,7 @@
     const dl = el('dl', 'keys');
     const rows = [
       ['Ctrl+Shift+N', t('help.new')],
+      ['Ctrl+Shift+K', t('help.switcher')],
       ['Ctrl+Shift+J', t('help.attention')],
       ['Ctrl+1 … 9', t('help.goTo')],
       ['Ctrl+Tab', t('help.cycle')],
@@ -873,6 +1339,7 @@
       ['Ctrl+,', t('help.settings')],
       [t('help.renameKey'), t('help.rename')],
       [t('help.reorderKey'), t('help.reorder')],
+      [t('help.menuKey'), t('help.menu')],
     ];
     for (const [k, d] of rows) dl.append(el('dt', null, k), el('dd', null, d));
     body.appendChild(dl);
@@ -962,8 +1429,23 @@
     animBox.type = 'checkbox';
     animRow.append(animBox, el('span', null, t('settings.animations')));
     animBox.addEventListener('change', () => updateSettings({ ui: { animations: animBox.checked } }));
+    const listField = el('div', 'set-field set-lang');
+    const listSeg = el('div', 'seg');
+    listSeg.setAttribute('role', 'group');
+    listSeg.setAttribute('aria-label', t('settings.listMode'));
+    for (const [mode, key] of [['groups', 'settings.listGroups'], ['status', 'settings.listStatus']]) {
+      const b = el('button', ui.listMode === mode ? 'on' : null, t(key));
+      b.setAttribute('aria-pressed', String(ui.listMode === mode));
+      b.addEventListener('click', async () => {
+        await setListMode(mode);
+        for (const x of listSeg.children) { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); }
+      });
+      listSeg.appendChild(b);
+    }
+    listField.append(el('span', 'set-label', t('settings.listMode')), listSeg);
+    const listNote = el('p', 'set-hint set-list-note', t('settings.listModeNote'));
 
-    body.append(fontField, sizeField, preview, uiSection, langField, animRow);
+    body.append(fontField, sizeField, preview, uiSection, langField, listField, listNote, animRow);
     modal.appendChild(body);
 
     let families = null;
@@ -1359,6 +1841,7 @@
   $('#welcome-new').addEventListener('click', openNewSession);
   $('#btn-help').addEventListener('click', openHelp);
   $('#btn-settings').addEventListener('click', openSettings);
+  $('#btn-switch').addEventListener('click', openSwitcher);
   for (const b of document.querySelectorAll('.seg button[data-view]')) b.addEventListener('click', () => setView(b.dataset.view));
   $('#tb-restart').addEventListener('click', () => ui.activeId && confirmRestart(ui.activeId));
   $('#tb-plugins').addEventListener('click', openPlugins);
@@ -1412,6 +1895,7 @@
     }
     applySettings();
     ui.view = data.view === 'grid' ? 'grid' : 'single';
+    ui.groups = Array.isArray(data.groups) ? data.groups : [];
     for (const v of data.sessions) addSession(v);
     for (const [id, buf] of Object.entries(data.buffers || {})) {
       const e = ui.sessions.get(id);

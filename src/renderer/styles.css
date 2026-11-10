@@ -471,6 +471,106 @@ span.peer { color: var(--muted); font-weight: 500; }
 
 ::selection { background: rgba(143, 179, 255, .3); }
 
+/* ---------- Session badges, list sections, groups ---------- */
+[data-color="blue"] { --mono-c: #6ea8fe; }
+[data-color="orange"] { --mono-c: #f59e5b; }
+[data-color="green"] { --mono-c: #5cd08f; }
+[data-color="pink"] { --mono-c: #f27fbf; }
+[data-color="cyan"] { --mono-c: #4fd1de; }
+[data-color="amber"] { --mono-c: #f2c14e; }
+[data-color="violet"] { --mono-c: #b18cff; }
+[data-color="lime"] { --mono-c: #a8d55a; }
+[data-color="red"] { --mono-c: #f07178; }
+[data-color="teal"] { --mono-c: #3fbfa6; }
+[data-color="indigo"] { --mono-c: #8b93ff; }
+[data-color="slate"] { --mono-c: #9aa6b8; }
+.mono {
+  display: inline-grid; place-items: center; flex: none; min-width: 22px; height: 16px; padding: 0 3px;
+  border-radius: 4px; background: var(--mono-c, #6ea8fe); color: #10131a;
+  font: 700 9.5px/1 var(--sans, inherit); letter-spacing: .4px; align-self: center;
+}
+.sess-row .mono { margin-right: 1px; }
+.sess[data-status="exited"] .mono { opacity: .5; }
+.pane-head .mono { margin-right: 2px; }
+
+.list-head {
+  display: flex; align-items: center; gap: 6px; padding: 12px 8px 4px 8px; color: var(--dim);
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; user-select: none;
+}
+.list-head:first-child { padding-top: 4px; }
+.list-head.collapsible { cursor: pointer; }
+.list-head.collapsible:hover { color: var(--muted); }
+.list-head[data-key="needs"] { color: var(--st-permission); }
+.list-head.is-group { color: var(--muted); }
+.lh-chev { display: none; width: 10px; flex: none; text-align: center; }
+.list-head.collapsible .lh-chev { display: inline-block; }
+.list-head.collapsible .lh-chev::before { content: "▾"; }
+.list-head.collapsible.collapsed .lh-chev::before { content: "▸"; }
+.lh-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lh-count { opacity: .7; font-variant-numeric: tabular-nums; }
+.lh-dots { display: flex; gap: 3px; margin-left: auto; }
+.lh-input {
+  width: 160px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--accent); background: var(--bg);
+  color: var(--text); font: inherit; text-transform: none; letter-spacing: normal;
+}
+.mini-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--st-ready); }
+.mini-dot[data-status="starting"] { background: var(--st-starting); }
+.mini-dot[data-status="busy"] { background: var(--st-busy); }
+.mini-dot[data-status="permission"] { background: var(--st-permission); }
+.mini-dot[data-status="input"] { background: var(--st-input); }
+.mini-dot[data-status="done"] { background: var(--st-done); }
+.mini-dot[data-status="exited"] { background: none; box-shadow: inset 0 0 0 1px var(--st-exited); }
+.list-head.drop-into { color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+.list-empty {
+  margin: 2px 4px 6px; padding: 7px 10px; border: 1px dashed var(--line-2); border-radius: var(--radius);
+  color: var(--dim); font-size: 12px;
+}
+.list-empty.drop-into { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- Context menu ---------- */
+.ctx-menu {
+  position: fixed; z-index: 1000; min-width: 210px; max-width: 290px; padding: 4px;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.5);
+}
+.ctx-label { padding: 6px 10px 4px; color: var(--dim); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+.ctx-item {
+  position: relative; display: block; width: 100%; padding: 6px 10px 6px 26px; border-radius: 5px; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ctx-item:hover, .ctx-item:focus-visible { background: var(--panel-3); }
+.ctx-item.checked::before { content: "✓"; position: absolute; left: 9px; color: var(--accent); }
+.ctx-item.danger { color: #f0717a; }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.ctx-swatches { display: grid; grid-template-columns: repeat(6, 22px); gap: 7px; padding: 4px 10px 8px 26px; }
+.swatch { width: 22px; height: 22px; border-radius: 6px; background: var(--mono-c); box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+.swatch:hover { transform: scale(1.1); }
+.swatch.on { box-shadow: 0 0 0 2px var(--panel-2), 0 0 0 4px var(--text); }
+
+/* ---------- Quick switcher ---------- */
+.switcher-modal { width: 580px; }
+.switcher-body { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.switcher-input {
+  padding: 9px 12px; border-radius: var(--radius); border: 1px solid var(--line-2); background: var(--bg);
+  color: var(--text); font: inherit; font-size: 14px;
+}
+.switcher-list { list-style: none; margin: 0; padding: 0; max-height: 52vh; overflow-y: auto; }
+.switcher-row {
+  display: grid; grid-template-columns: 14px auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: var(--radius); cursor: pointer;
+}
+.switcher-row.sel { background: var(--panel-3); }
+.sw-name { font-weight: 600; white-space: nowrap; }
+.switcher-row.current .sw-name { text-decoration: underline; text-decoration-color: var(--dim); text-underline-offset: 3px; }
+.sw-meta { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sw-state { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.sw-state[data-status="busy"] b { color: var(--st-busy); }
+.sw-state[data-status="permission"] b { color: var(--st-permission); }
+.sw-state[data-status="input"] b { color: var(--st-input); }
+.sw-state[data-status="done"] b { color: var(--st-done); }
+.switcher-empty { padding: 10px; color: var(--dim); }
+.switcher-hint { color: var(--dim); font-size: 11px; }
+.set-list-note { margin: -8px 0 0; }
+
 /* Thin dark scrollbars for the lists (the terminal has its own, above). */
 .session-list::-webkit-scrollbar, .font-list::-webkit-scrollbar, .switcher-list::-webkit-scrollbar,
 .proj-list::-webkit-scrollbar, .conv-list::-webkit-scrollbar, .mp-list::-webkit-scrollbar { width: 8px; }

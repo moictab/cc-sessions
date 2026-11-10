@@ -26,6 +26,7 @@ function normalize(data) {
     ui: {
       animations: u.animations !== false, // status indicators; on unless turned off here
       language: i18n.normalize(u.language), // 'en' unless a supported one was chosen
+      listMode: u.listMode === 'status' ? 'status' : 'groups', // how the sidebar organizes sessions
     },
   };
 }

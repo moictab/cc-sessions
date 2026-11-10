@@ -39,6 +39,9 @@
           <button data-view="grid" title="Grid (Ctrl+Shift+G)" data-i18n-title="sidebar.gridTitle" data-i18n="sidebar.grid">Grid</button>
         </div>
         <div class="foot-actions">
+          <button id="btn-switch" class="foot-btn" title="Find a session (Ctrl+Shift+K)" data-i18n-title="sidebar.switcherTitle">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4" /><path d="M10 10l3.5 3.5" /></svg>
+          </button>
           <button id="btn-messages" class="foot-btn" title="Messages between sessions (Ctrl+Shift+M)" data-i18n-title="sidebar.messagesTitle" aria-pressed="false">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11v8h-11zM2.5 4.5 8 9l5.5-4.5" /></svg>
             <span id="msg-unread" class="msg-unread" hidden></span>
@@ -57,6 +60,7 @@
       <header id="topbar" hidden>
         <div class="tb-title">
           <span id="tb-dot" class="dot"></span>
+          <span id="tb-mono" class="mono"></span>
           <span id="tb-name" class="tb-name" title="Double-click to rename" data-i18n-title="topbar.rename"></span>
           <button id="tb-path" class="tb-path" title="Open folder" data-i18n-title="topbar.openFolder"></button>
         </div>

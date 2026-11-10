@@ -313,6 +313,7 @@ function registerIpc() {
     terminalFont: readTerminalFont(),
     settings: settings.get(),
     settingsLimits: SETTINGS_LIMITS,
+    groups: Array.isArray(store.state.groups) ? store.state.groups : [],
   }));
   ipcMain.handle('messages:clear', () => messages.clear());
   ipcMain.handle('settings:update', (_e, patch) => settings.update(patch));
@@ -340,6 +341,15 @@ function registerIpc() {
     store.update(keep);
   });
   ipcMain.on('ui:reorder', (_e, ids) => manager.reorder(ids));
+  // Sidebar groups, in order: [{ id, name, collapsed }]. Sessions point at them by id.
+  ipcMain.on('ui:groups', (_e, groups) => {
+    if (!Array.isArray(groups)) return;
+    const clean = groups.slice(0, 50)
+      .filter((g) => g && typeof g.id === 'string' && g.id && typeof g.name === 'string')
+      .map((g) => ({ id: g.id.slice(0, 64), name: g.name.trim().slice(0, 60) || '?', collapsed: !!g.collapsed }));
+    store.update({ groups: clean });
+  });
+  ipcMain.handle('session:set-meta', (_e, id, patch) => manager.setMeta(id, patch));
   ipcMain.on('ui:devtools', () => win.webContents.toggleDevTools());
   // After a change of language. From here because 'will-navigate' (below in createWindow) also
   // blocks a reload started by the page; the terminals come back through 'init'.

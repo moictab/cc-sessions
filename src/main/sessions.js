@@ -24,6 +24,10 @@ const i18n = require('../shared/i18n');
 
 const ATTENTION = new Set(['permission', 'input', 'done']);
 const IDLE = new Set(['ready', 'done']);
+// Badge colors (the renderer draws them), in the order new sessions get them: each pick is the
+// least used one, so up to 12 sessions all look different.
+const COLORS = ['blue', 'orange', 'green', 'pink', 'cyan', 'amber', 'violet', 'lime', 'red', 'teal', 'indigo', 'slate'];
+const cleanGroup = (g) => (typeof g === 'string' && g ? g.slice(0, 64) : null);
 const MAX_BUFFER = 512 * 1024;
 // A session may ask for a restart itself (to load a plugin); this keeps a confused one from looping.
 const SELF_RESTARTS_PER_HOUR = 6;
@@ -55,6 +59,7 @@ class SessionManager extends EventEmitter {
       setTimeout(() => this.spawn(s), delay);
       delay += 350;
     }
+    this.emit('persist'); // badge colors given to sessions saved before there were any
   }
 
   create({ cwd, name, resumeId }) {
@@ -75,6 +80,8 @@ class SessionManager extends EventEmitter {
       name: rec.name || path.basename(rec.cwd),
       // When the name was last set, here or with /rename in Claude (0: saved by an older version).
       nameSince: Number(rec.nameSince) || 0,
+      color: COLORS.includes(rec.color) ? rec.color : this.pickColor(), // the badge in the sidebar
+      group: cleanGroup(rec.group), // id of a sidebar group (the groups themselves live in the store)
       cwd: rec.cwd,
       claudeSessionId: rec.claudeSessionId || null,
       status: rec.exited ? 'exited' : 'starting',
@@ -514,6 +521,26 @@ class SessionManager extends EventEmitter {
 
   // ---- queries ---------------------------------------------------------------------
 
+  /** The least used badge color (ties: the earlier one in COLORS). */
+  pickColor() {
+    const used = new Map(COLORS.map((c) => [c, 0]));
+    for (const s of this.sessions.values()) if (used.has(s.color)) used.set(s.color, used.get(s.color) + 1);
+    let best = COLORS[0];
+    for (const c of COLORS) if (used.get(c) < used.get(best)) best = c;
+    return best;
+  }
+
+  /** Sidebar look: { color } and/or { group } (null: no group). */
+  setMeta(id, patch) {
+    const s = this.sessions.get(id);
+    if (!s || !patch || typeof patch !== 'object') return null;
+    if (COLORS.includes(patch.color)) s.color = patch.color;
+    if ('group' in patch) s.group = cleanGroup(patch.group);
+    this.emit('update', this.view(s));
+    this.emit('persist');
+    return this.view(s);
+  }
+
   rename(id, name) {
     const s = this.sessions.get(id);
     if (!s || typeof name !== 'string' || !name.trim()) return null;
@@ -587,6 +614,8 @@ class SessionManager extends EventEmitter {
       id: s.id,
       name: s.name,
       nameSince: s.nameSince,
+      color: s.color,
+      group: s.group,
       cwd: s.cwd,
       claudeSessionId: s.claudeSessionId,
       // Processes we kill on quit don't go through setStatus('exited'), so this only
@@ -616,6 +645,8 @@ class SessionManager extends EventEmitter {
       pendingRestart: s.restartWhenIdle ? this.changeText(s.restartWhenIdle.changes) : '',
       cols: s.cols, // the PTY's size: a page that reconnects replays the output at it
       rows: s.rows,
+      color: s.color,
+      group: s.group,
     };
   }
 }
