@@ -20,6 +20,7 @@ const { sessionEnv, transcriptExists } = require('./claude-env');
 const { parseEnvelopes } = require('./messages');
 const plugins = require('./plugins');
 const { restartNote } = require('./restart-note');
+const { adminContext } = require('./admin');
 const i18n = require('../shared/i18n');
 
 const ATTENTION = new Set(['permission', 'input', 'done']);
@@ -114,6 +115,7 @@ class SessionManager extends EventEmitter {
       flushTimer: null,
       plugins: plugins.sanitizeOverrides(rec.plugins), // per-session plugin overrides (persisted)
       admin: !!rec.admin, // runs as administrator, through the helper in admin.js (persisted)
+      adminDropped: !!rec.adminDropped, // was administrator until now: tell it on its next start
       parked: false, // an administrator session restored but not started yet
       elevated: null, // whether the running process really has administrator rights
       loadedPlugins: {}, // the overrides the running process was started with
@@ -319,7 +321,7 @@ class SessionManager extends EventEmitter {
 
   handleHook(terminalId, p) {
     const s = this.sessions.get(terminalId);
-    if (!s || !p || typeof p !== 'object') return;
+    if (!s || !p || typeof p !== 'object') return null;
 
     if (p.session_id && p.session_id !== s.claudeSessionId) {
       s.claudeSessionId = p.session_id; // e.g. after /clear
@@ -327,10 +329,13 @@ class SessionManager extends EventEmitter {
     }
 
     switch (p.hook_event_name) {
-      case 'SessionStart':
+      case 'SessionStart': {
         // Auto-compaction restarts the session mid-turn; keep whatever we had.
         if (p.source !== 'compact') this.setStatus(s, 'ready');
-        break;
+        // On every start, resume, /clear and compaction, so it's never forgotten.
+        const context = this.startContext(s);
+        return context ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } } : null;
+      }
       case 'UserPromptSubmit': {
         const envelopes = parseEnvelopes(p.prompt);
         if (envelopes.length) {
@@ -370,6 +375,18 @@ class SessionManager extends EventEmitter {
       default:
         break;
     }
+    return null;
+  }
+
+  /** What a session should know as it starts: that it runs as administrator, or no longer does. */
+  startContext(s) {
+    if (s.admin) return adminContext({ elevated: !!s.elevated });
+    if (s.adminDropped) {
+      s.adminDropped = false;
+      this.emit('persist');
+      return adminContext({ dropped: true });
+    }
+    return '';
   }
 
   /** Cross-check with ~/.claude/sessions: fixes missed hooks and tracks /clear. */
@@ -550,6 +567,7 @@ class SessionManager extends EventEmitter {
     if (!s || typeof on !== 'boolean') return null;
     if (s.admin === on) return this.view(s);
     s.admin = on;
+    s.adminDropped = !on; // so the session hears it no longer has those rights
     this.emit('persist');
     if (s.pty) return this.restart(id, { note });
     s.parked = on;
@@ -665,6 +683,7 @@ class SessionManager extends EventEmitter {
       createdAt: s.createdAt,
       plugins: s.plugins,
       admin: s.admin,
+      adminDropped: s.adminDropped,
     }));
   }
 

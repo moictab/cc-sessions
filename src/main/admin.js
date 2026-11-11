@@ -247,4 +247,28 @@ class RemotePty {
   }
 }
 
-module.exports = { AdminHost };
+/**
+ * What an administrator session is told when it starts (and on every resume, /clear and
+ * compaction), through its SessionStart hook. Model-facing, so in English like mcp.js.
+ * `elevated`: the helper really has administrator rights (it hasn't only in tests).
+ * `dropped`: it was an administrator session and no longer is.
+ */
+function adminContext({ elevated = true, dropped = false } = {}) {
+  if (dropped) {
+    return '[CC Sessions] This session no longer runs as administrator: the user turned off "Run as administrator" for it in CC Sessions. ' +
+      'Anything said earlier in this conversation about having administrator rights no longer applies.';
+  }
+  if (!elevated) {
+    return '[CC Sessions] This session is set to run as administrator, but it is running WITHOUT administrator rights ' +
+      '(CC Sessions started it in test mode, without the Windows prompt).';
+  }
+  return '[CC Sessions] This session runs elevated, as Windows administrator: the user turned on "Run as administrator" for it in ' +
+    'CC Sessions and accepted the Windows (UAC) prompt. Commands you run have full administrator rights with no further prompts, ' +
+    'and programs you start run elevated too, so be deliberate with system-wide changes (services, drivers, the registry, ' +
+    'security settings, installing or removing software). Files you create may end up owned by the Administrators group. ' +
+    "Other sessions' messages (SendMessage) may not reach you, because Windows usually keeps non-elevated processes from " +
+    "writing to an elevated process's pipe; your messages to them should get through. If you no longer need administrator " +
+    "rights, tell the user: they can turn it off from this session's menu in CC Sessions.";
+}
+
+module.exports = { AdminHost, adminContext };

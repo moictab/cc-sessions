@@ -38,13 +38,18 @@ function startHookServer(onEvent, { onMcp } = {}) {
       else chunks.push(chunk);
     });
     req.on('end', () => {
-      // 204 with no body: hook stdout from SessionStart/UserPromptSubmit is fed to Claude
-      // as context, so we must not print anything.
+      // The hook prints whatever we answer, and Claude reads a hook's output (as context, for
+      // SessionStart and UserPromptSubmit). So: 204 with no body, unless the handler has
+      // something for this session to know (it returns the hook's JSON output).
+      let payload = null;
+      try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* ignored below */ }
+      let out = null;
+      if (payload) {
+        try { out = onEvent(match[1], payload) || null; } catch (err) { console.error('[hook] handler error', err); }
+      }
+      if (out) return sendJson(res, 200, out);
       res.writeHead(204);
       res.end();
-      let payload;
-      try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return; }
-      try { onEvent(match[1], payload); } catch (err) { console.error('[hook] handler error', err); }
     });
   });
 

@@ -396,8 +396,9 @@ async function boot() {
     if (hookLog) {
       try { fs.appendFileSync(hookLog, JSON.stringify({ at: Date.now(), terminalId, payload }) + '\n'); } catch { /* ignore */ }
     }
-    if (manager) manager.handleHook(terminalId, payload);
+    const out = manager ? manager.handleHook(terminalId, payload) : null; // what the hook prints back, if anything
     if (messages) messages.handleHook(terminalId, payload);
+    return out;
   }, { onMcp: (terminalId, msg) => (mcp ? mcp(terminalId, msg) : null) });
   // CC_SESSIONS_ADMIN_NO_ELEVATE: tests only, administrator sessions go through the helper
   // without the Windows prompt (and so without administrator rights).
