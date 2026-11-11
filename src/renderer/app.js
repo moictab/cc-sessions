@@ -150,7 +150,7 @@
       case 'permission': return { label: t('status.permission'), text: permissionText(v.detail) };
       case 'input': return { label: t('status.input'), text: oneLine(v.detail) };
       case 'done': return { label: t('status.done'), text: oneLine(v.lastReply) };
-      case 'ready': return { label: t('status.ready'), text: v.lastPrompt ? t('status.lastPrompt', { text: oneLine(v.lastPrompt, 100) }) : '' };
+      case 'ready': return { label: t('status.ready'), text: v.lastPrompt ? t('common.quote', { text: oneLine(v.lastPrompt, 100) }) : '' };
       case 'exited': return { label: t('status.exited'), text: oneLine(v.detail) };
       default: return { label: t('status.starting'), text: '' };
     }
@@ -291,12 +291,14 @@
     const li = el('li', 'sess');
     li.dataset.id = id;
     li.draggable = true;
-    li.appendChild(el('span', 'dot'));
-    const main = el('div', 'sess-main');
+    // [badge] name ............ time (the Ctrl+N number while Ctrl is held)
+    //         ● status · detail
+    //         path (only when the folder isn't named like the session)
     const row = el('div', 'sess-row');
-    row.append(el('span', 'mono'), el('span', 'sess-name'), el('span', 'sess-time'));
-    main.append(row, el('div', 'sess-path'), el('div', 'sess-detail'));
-    li.append(main, el('kbd', 'sess-key'));
+    row.append(el('span', 'sess-name'), el('span', 'sess-time'), el('kbd', 'sess-key'));
+    const status = el('div', 'sess-status');
+    status.append(el('span', 'dot'), el('span', 'sess-detail'));
+    li.append(el('span', 'mono'), row, status, el('div', 'sess-path'));
 
     li.addEventListener('click', () => setActive(id));
     li.addEventListener('dblclick', () => { setActive(id); startRename(); });
@@ -393,11 +395,13 @@
     e.item.classList.toggle('interrupted', interrupted);
     e.pane.classList.toggle('interrupted', interrupted);
     e.item.title = v.cwd;
-    setBadge($('.sess-row .mono', e.item), v);
+    setBadge($('.mono', e.item), v);
     setBadge($('.pane-head .mono', e.pane), v);
     $('.sess-name', e.item).textContent = v.name;
     $('.sess-time', e.item).textContent = ago(v.statusSince);
-    $('.sess-path', e.item).textContent = shortPath(v.cwd);
+    const path = $('.sess-path', e.item);
+    path.textContent = shortPath(v.cwd);
+    path.hidden = sameName(v.name, v.cwd);
     $('.sess-detail', e.item).replaceChildren(stateLine(v));
 
     e.pane.dataset.status = v.status;
@@ -480,10 +484,20 @@
     return (caps && caps.length >= 2 ? caps[0] + caps[1] : [...w].slice(0, 2).join('')).toUpperCase();
   }
 
+  // The letters go in an inner span trimmed to the capitals' height (text-box), so they sit
+  // in the optical middle of the badge instead of where the font's ascent/descent put them.
   function setBadge(node, view) {
     if (!node) return;
-    node.textContent = initials(view.name);
+    const text = initials(view.name);
+    const inner = node.firstElementChild || node.appendChild(el('span'));
+    if (inner.textContent !== text) inner.textContent = text;
     node.dataset.color = COLORS.includes(view.color) ? view.color : COLORS[0];
+  }
+
+  /** The folder is named like the session ("cc-sessions" and "CC Sessions" count as the same). */
+  function sameName(name, cwd) {
+    const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    return norm(name) === norm(String(cwd || '').split(/[\\/]/).filter(Boolean).pop());
   }
 
   function badge(view) {
@@ -1128,6 +1142,24 @@
     else handled = false;
     if (handled) { ev.preventDefault(); ev.stopPropagation(); }
   }, true);
+
+  // Holding Ctrl on its own for a moment shows the Ctrl+1…9 numbers in the list. The delay keeps
+  // them from flashing on every Ctrl+C / Ctrl+V; any other key cancels it.
+  let keysTimer = null;
+  function showKeys(on) {
+    clearTimeout(keysTimer);
+    keysTimer = null;
+    document.body.classList.toggle('show-keys', on);
+  }
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Control') { if (keysTimer) showKeys(false); return; }
+    if (!ev.repeat && !ev.shiftKey && !ev.altKey && !ev.metaKey) {
+      clearTimeout(keysTimer);
+      keysTimer = setTimeout(() => { keysTimer = null; document.body.classList.add('show-keys'); }, 450);
+    }
+  }, true);
+  window.addEventListener('keyup', (ev) => { if (ev.key === 'Control') showKeys(false); }, true);
+  window.addEventListener('blur', () => showKeys(false));
 
   api.onWindowAttended((attended) => {
     ui.windowAttended = !!attended;

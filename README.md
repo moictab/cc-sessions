@@ -91,7 +91,7 @@ A `>_` prompt with three status lights (your turn, needs permission, working), i
 | `Ctrl+Shift+N` | New session or resume a conversation |
 | `Ctrl+Shift+K` | Find a session by name, initials, group or folder |
 | `Ctrl+Shift+J` | Go to the next session that needs you (permission > question > finished) |
-| `Ctrl+1` … `Ctrl+9` | Go to session N (the number on its row) |
+| `Ctrl+1` … `Ctrl+9` | Go to session N (hold Ctrl for a moment to see the numbers in the list) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session |
 | `Ctrl+Shift+G` | Toggle single / grid |
 | `Ctrl+Shift+M` | Messages between sessions |

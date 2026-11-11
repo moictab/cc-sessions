@@ -89,7 +89,7 @@ Un prompt `>_` con tres luces de estado (tu turno, necesita permiso, trabajando)
 | `Ctrl+Shift+N` | Nueva sesión o retomar una conversación |
 | `Ctrl+Shift+K` | Buscar una sesión por nombre, iniciales, grupo o carpeta |
 | `Ctrl+Shift+J` | Ir a la siguiente sesión que te necesita (permiso > pregunta > terminada) |
-| `Ctrl+1` … `Ctrl+9` | Ir a la sesión N (el número de su fila) |
+| `Ctrl+1` … `Ctrl+9` | Ir a la sesión N (mantén Ctrl un momento para ver los números en la lista) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Sesión siguiente / anterior |
 | `Ctrl+Shift+G` | Alternar entre una y cuadrícula |
 | `Ctrl+Shift+M` | Panel de mensajes entre sesiones |
