@@ -189,7 +189,9 @@ class SessionManager extends EventEmitter {
         else this.emit('update', this.view(s));
       });
     }
-    proc.onData((data) => this.onData(s, data));
+    // A process being replaced by a restart can still print as it dies (cmd's "^C", for one):
+    // that would land in the new process's terminal, whose buffer was just cleared.
+    proc.onData((data) => { if (s.pty === proc) this.onData(s, data); });
     proc.onExit(({ exitCode, error }) => {
       if (s.pty !== proc) return; // replaced by a restart
       s.pty = null;
