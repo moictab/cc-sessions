@@ -268,9 +268,17 @@ async function onClose(e) {
     });
     if (response !== 0) return;
   }
+  await shutdown();
+}
+
+/** Saves everything, closes every session and the window. `relaunch`: start again afterwards. */
+async function shutdown({ relaunch = false } = {}) {
+  if (allowClose) return;
   manager.markInterrupted();
   saveAll();
   allowClose = true; // from here on we're quitting (second-instance won't bring the window back)
+  // The new instance waits for this one to let go of the single-instance lock (acquireInstanceLock).
+  if (relaunch) app.relaunch();
   win.hide(); // closing takes a moment: wait for the terminals out of sight
   registry.stop();
   await manager.killAll();
@@ -355,6 +363,14 @@ function registerIpc() {
     store.update({ groups: clean });
   });
   ipcMain.handle('session:set-meta', (_e, id, patch) => manager.setMeta(id, patch));
+  // Restarting the app in an orderly way: first the sessions are asked to stop their background
+  // work (and told to carry on if it's called off), then the app closes and, if asked, starts again.
+  ipcMain.handle('app:wind-down', () => manager.windDownAll(t('winddown.note')));
+  ipcMain.handle('app:wind-cancel', () => manager.cancelWindDown(t('winddown.cancelNote')));
+  ipcMain.handle('app:quit', async (_e, opts) => {
+    if (opts && opts.resumeAfter) manager.noteAfterRestart(t('winddown.afterNote'));
+    await shutdown({ relaunch: !!(opts && opts.relaunch) });
+  });
   ipcMain.on('ui:devtools', () => win.webContents.toggleDevTools());
   // After a change of language. From here because 'will-navigate' (below in createWindow) also
   // blocks a reload started by the page; the terminals come back through 'init'.

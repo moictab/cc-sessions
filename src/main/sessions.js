@@ -125,7 +125,10 @@ class SessionManager extends EventEmitter {
       elevated: null, // whether the running process really has administrator rights
       loadedPlugins: {}, // the overrides the running process was started with
       restartWhenIdle: null, // { change, note }: restart as soon as the current turn ends
-      resumeNote: '', // typed into the session once it's back after a restart
+      // Typed into the session once it's back after a restart (kept between runs: the note after
+      // restarting the app is delivered by the next run).
+      resumeNote: typeof rec.resumeNote === 'string' ? rec.resumeNote.slice(0, 4000) : '',
+      wind: null, // { kind: 'stop' | 'cancel', state, text, timer }: see windDownAll()
       idleTimer: null,
       noteTimer: null,
       selfRestarts: [],
@@ -250,6 +253,7 @@ class SessionManager extends EventEmitter {
     clearTimeout(s.idleTimer);
     clearTimeout(s.noteTimer);
     clearTimeout(s.sizeTimer);
+    this.clearWind(s);
     this.sessions.delete(id);
     for (const ext of ['.json', '.mcp.json']) {
       try { fs.rmSync(path.join(this.settingsDir, id + ext), { force: true }); } catch { /* ignore */ }
@@ -383,9 +387,18 @@ class SessionManager extends EventEmitter {
         if (p.tool_name === 'AskUserQuestion') this.setStatus(s, 'input', firstQuestion(p.tool_input) || own('session.asking'));
         else if (p.tool_name === 'ExitPlanMode') this.setStatus(s, 'input', own('session.plan'));
         break;
-      case 'PostToolUse':
+      case 'PostToolUse': {
         if (s.status !== 'busy') this.setStatus(s, 'busy');
+        // A request for a session that's working: it reads it along with this step's result,
+        // without anything being typed over what it's doing.
+        const w = s.wind;
+        if (w && w.state === 'queued') {
+          w.state = 'delivered';
+          this.emit('update', this.view(s));
+          return { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: w.text } };
+        }
         break;
+      }
       case 'Notification': {
         const kind = classifyNotification(p);
         if (kind === 'permission') this.setStatus(s, 'permission', s.pendingTool || p.message || '');
@@ -396,6 +409,8 @@ class SessionManager extends EventEmitter {
       }
       case 'Stop':
         if (typeof p.last_assistant_message === 'string') s.lastReply = p.last_assistant_message.slice(0, 2000);
+        // Before setStatus: for a request still queued, the end of this turn is when it gets typed.
+        if (s.wind && s.wind.state === 'delivered') this.windAnswered(s);
         this.setStatus(s, 'done');
         this.onIdle(s); // also when we already thought it was idle (setStatus didn't change)
         this.emit('persist');
@@ -454,7 +469,101 @@ class SessionManager extends EventEmitter {
     if (ATTENTION.has(status) && prev !== status && (status !== 'done' || prev === 'busy')) {
       this.emit('attention', this.view(s));
     }
+    if (s.wind) this.windStep(s);
     if (IDLE.has(status)) this.onIdle(s);
+  }
+
+  // ---- winding down before the app restarts ------------------------------------------------
+
+  /**
+   * Asks every running session to stop its background work (commands, monitors, reminders,
+   * subagents) and not start more, since restarting the app closes them all. How it reaches each:
+   *   idle (ready, done)        typed in, like a prompt
+   *   working                   with the result of its next step (PostToolUse additionalContext)
+   *   permission, question,     not touched until that's over: typing would answer it
+   *   starting
+   * It counts as answered when the turn that read it ends. The UI shows how each one is doing.
+   */
+  windDownAll(text) {
+    for (const s of this.sessions.values()) {
+      this.clearWind(s);
+      s.wind = { kind: 'stop', state: s.pty && s.status !== 'exited' ? 'waiting' : 'closed', text, timer: null };
+      this.windStep(s);
+      this.emit('update', this.view(s));
+    }
+  }
+
+  /** Never mind: the sessions that were asked are told they can carry on. */
+  cancelWindDown(text) {
+    for (const s of this.sessions.values()) {
+      const told = s.wind && s.wind.kind === 'stop' && (s.wind.state === 'delivered' || s.wind.state === 'done');
+      this.clearWind(s);
+      if (told && s.pty) {
+        s.wind = { kind: 'cancel', state: 'waiting', text, timer: null };
+        this.windStep(s);
+      }
+      this.emit('update', this.view(s));
+    }
+  }
+
+  /** On restarting the app: a note for each session that was asked to stop, for when it's back. */
+  noteAfterRestart(text) {
+    for (const s of this.sessions.values()) {
+      if (s.wind && s.wind.kind === 'stop' && (s.wind.state === 'delivered' || s.wind.state === 'done')) s.resumeNote = text;
+    }
+    this.emit('persist');
+  }
+
+  clearWind(s) {
+    if (s.wind) clearTimeout(s.wind.timer);
+    s.wind = null;
+  }
+
+  windStep(s) {
+    const w = s.wind;
+    if (!w || w.state === 'done' || w.state === 'closed' || w.state === 'delivered') return;
+    if (!s.pty || s.status === 'exited') {
+      clearTimeout(w.timer);
+      if (w.kind === 'cancel') s.wind = null;
+      else w.state = 'closed';
+      return;
+    }
+    if (s.status === 'busy') { w.state = 'queued'; return; }
+    if (!IDLE.has(s.status)) { w.state = 'waiting'; return; } // permission, question, starting
+    if (w.timer) return;
+    // A moment after the turn ends, so the prompt takes input again.
+    w.timer = setTimeout(() => {
+      w.timer = null;
+      if (s.wind !== w || (w.state !== 'waiting' && w.state !== 'queued')) return;
+      if (!s.pty || !IDLE.has(s.status)) { this.windStep(s); return; }
+      w.state = 'delivered';
+      this.typeNote(s, w.text);
+      this.emit('update', this.view(s));
+    }, 600);
+  }
+
+  /** The turn that read the request ended. */
+  windAnswered(s) {
+    if (s.wind.kind === 'cancel') this.clearWind(s);
+    else s.wind.state = 'done';
+  }
+
+  /**
+   * Types `text` as a prompt and sends it. Claude takes a long burst of input as a paste, and an
+   * Enter that arrives too soon after it becomes a line break. So wait, and press it again if the
+   * prompt wasn't sent (any status change means it was, or that something else is going on).
+   */
+  typeNote(s, text) {
+    const proc = s.pty;
+    if (!proc) return;
+    proc.write(text);
+    const since = s.statusSince;
+    const submit = (retries) => {
+      if (s.pty !== proc || s.statusSince !== since) return;
+      proc.write('\r');
+      if (retries > 0) setTimeout(() => submit(retries - 1), 2000);
+    };
+    setTimeout(() => submit(2), 800);
   }
 
   // ---- restarts that wait for the turn to end, and notes for after a restart ------------
@@ -480,17 +589,8 @@ class SessionManager extends EventEmitter {
         if (!s.resumeNote || !proc || !IDLE.has(s.status)) return;
         const text = s.resumeNote;
         s.resumeNote = '';
-        proc.write(text);
-        // Claude takes a long burst of input as a paste, and an Enter that arrives too soon
-        // after it becomes a line break. Wait, and press it again if the prompt wasn't sent
-        // (any status change means it was, or that something else is going on).
-        const since = s.statusSince;
-        const submit = (retries) => {
-          if (s.pty !== proc || s.statusSince !== since) return;
-          proc.write('\r');
-          if (retries > 0) setTimeout(() => submit(retries - 1), 2000);
-        };
-        setTimeout(() => submit(2), 800);
+        this.emit('persist');
+        this.typeNote(s, text);
       }, 1500);
     }
   }
@@ -714,6 +814,7 @@ class SessionManager extends EventEmitter {
       adminDropped: s.adminDropped,
       cols: s.cols,
       rows: s.rows,
+      resumeNote: s.resumeNote,
     }));
   }
 
@@ -736,6 +837,7 @@ class SessionManager extends EventEmitter {
       color: s.color,
       group: s.group,
       admin: s.admin,
+      wind: s.wind && s.wind.kind === 'stop' ? s.wind.state : null, // winding down before a restart
       parked: s.parked, // administrator session restored, waiting for you to start it
       elevated: s.elevated,
     };

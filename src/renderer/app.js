@@ -77,6 +77,7 @@
     tbDot: $('#tb-dot'),
     tbMono: $('#tb-mono'),
     tbAdmin: $('#tb-admin'),
+    windDot: $('#wind-dot'),
     tbName: $('#tb-name'),
     tbPath: $('#tb-path'),
     tbStatus: $('#tb-status'),
@@ -265,6 +266,7 @@
     renderSidebar();
     if (regrouped) syncPanes();
     updateAttention();
+    updateWind();
     return e;
   }
 
@@ -1397,6 +1399,87 @@
     });
   }
 
+  // ---------------------------------------------------------------- restarting the app
+
+  /** The footer button shows a dot while the sessions are being asked to stop; the panel follows them. */
+  function updateWind() {
+    const on = [...ui.sessions.values()].some((e) => e.view.wind);
+    dom.windDot.hidden = !on;
+    if (ui.windRender) ui.windRender();
+  }
+
+  /**
+   * Restart CC Sessions in an orderly way: first every running session is asked to stop its
+   * background work (main: windDownAll), and the panel shows how each one is doing and what it
+   * answered. Restart (or close) whenever you like; calling it off tells them to carry on.
+   */
+  function openWindDown() {
+    const modal = modalShell('wind-modal', t('winddown.title'));
+    const body = el('div', 'modal-body');
+    const foot = el('div', 'modal-foot');
+    modal.append(body, foot);
+    const resume = el('label', 'set-check wind-resume');
+    const resumeInput = el('input');
+    resumeInput.type = 'checkbox';
+    resumeInput.checked = readPref('windResume', true);
+    resumeInput.addEventListener('change', () => writePref('windResume', resumeInput.checked));
+    resume.append(resumeInput, el('span', null, t('winddown.resumeAfter')));
+
+    const quit = (relaunch, started) => api.quitApp({ relaunch, resumeAfter: started && resumeInput.checked });
+    const button = (cls, label, action) => {
+      const b = el('button', cls, label);
+      b.addEventListener('click', action);
+      return b;
+    };
+
+    const render = () => {
+      const all = stableOrder().map((id) => ui.sessions.get(id));
+      const started = all.some((e) => e.view.wind);
+      const running = all.filter((e) => e.view.status !== 'exited');
+      const pending = all.filter((e) => e.view.wind && e.view.wind !== 'done' && e.view.wind !== 'closed').length;
+      const list = el('ul', 'wind-list');
+      for (const e of all) {
+        const v = e.view;
+        const state = started ? v.wind || 'closed' : v.status === 'exited' ? 'closed' : null;
+        const li = el('li', 'wind-row');
+        li.dataset.state = state || '';
+        const text = el('div', 'wind-text');
+        const line = el('div', 'wind-line');
+        line.append(el('span', 'wind-name', v.name));
+        if (state) line.append(el('span', 'wind-state', t('winddown.state.' + state)));
+        text.appendChild(line);
+        if (state === 'done' && v.lastReply) text.appendChild(el('div', 'wind-reply', oneLine(v.lastReply, 240)));
+        li.append(badge(v), text);
+        list.appendChild(li);
+      }
+      const nodes = [];
+      if (!started) nodes.push(el('p', 'wind-intro', t('winddown.intro')), el('p', 'wind-how', t('winddown.howItReaches')));
+      if (!running.length && !started) nodes.push(el('p', 'wind-how', t('winddown.noneRunning')));
+      nodes.push(list, resume);
+      if (started) nodes.push(el('p', 'wind-progress' + (pending ? '' : ' done'), pending ? t('winddown.pending', { n: pending }) : t('winddown.allDone')));
+      body.replaceChildren(...nodes);
+      resume.hidden = !started && !running.length;
+
+      foot.replaceChildren(...(started
+        ? [
+          button('btn-secondary wind-cancel', t('winddown.cancel'), () => { api.cancelWindDown(); closeModal(); }),
+          button('btn-secondary', t('winddown.quit'), () => quit(false, true)),
+          button('btn-primary', t('winddown.restartNow'), () => quit(true, true)),
+        ]
+        : [
+          button('btn-secondary', t('common.cancel'), closeModal),
+          button(running.length ? 'btn-secondary' : 'btn-primary', t('winddown.restartNow'), () => quit(true, false)),
+          ...(running.length ? [button('btn-primary', t('winddown.ask'), () => api.windDown())] : []),
+        ]));
+    };
+    ui.windRender = render;
+    render();
+    // Closing the panel doesn't call anything off: the footer button brings it back.
+    openModal(modal, { onClose: () => { ui.windRender = null; } });
+    const primary = foot.querySelector('.btn-primary');
+    if (primary) primary.focus();
+  }
+
   function openHelp() {
     const modal = modalShell('help-modal', t('help.title'));
     const body = el('div', 'modal-body');
@@ -1918,6 +2001,7 @@
   $('#btn-new').addEventListener('click', openNewSession);
   $('#welcome-new').addEventListener('click', openNewSession);
   $('#btn-help').addEventListener('click', openHelp);
+  $('#btn-restart-app').addEventListener('click', openWindDown);
   $('#btn-settings').addEventListener('click', openSettings);
   $('#btn-switch').addEventListener('click', openSwitcher);
   for (const b of document.querySelectorAll('.seg button[data-view]')) b.addEventListener('click', () => setView(b.dataset.view));
@@ -1980,6 +2064,7 @@
       if (e && buf) e.term.write(buf);
     }
     ui.ready = true;
+    updateWind(); // a reload in the middle of winding down
     $('#welcome-warn').hidden = !!data.claudeFound;
     if (readPref('externalOpen', false)) { dom.extToggle.setAttribute('aria-expanded', 'true'); dom.extList.hidden = false; }
     renderExternal(data.external || []);
