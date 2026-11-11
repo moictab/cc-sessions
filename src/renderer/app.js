@@ -1000,6 +1000,15 @@
     }
   }
 
+  /**
+   * The size a new session's terminal will have: in single view, that of the session on screen.
+   * It starts at that size, so Claude doesn't have to catch a resize while it's starting up.
+   */
+  function newTermSize() {
+    const e = ui.view === 'single' && ui.sessions.get(ui.activeId);
+    return e && e.lastSize ? { cols: e.lastSize.cols, rows: e.lastSize.rows } : {};
+  }
+
   function fitVisible() {
     for (const e of ui.sessions.values()) fitEntry(e);
   }
@@ -1634,7 +1643,7 @@
     const startNew = async () => {
       if (!current) return;
       const name = (nameInput && nameInput.value.trim()) || uniqueName(basename(current.cwd));
-      const view = await api.createSession({ cwd: current.cwd, name });
+      const view = await api.createSession({ cwd: current.cwd, name, ...newTermSize() });
       closeModal();
       addSession(view);
       setActive(view.id);
@@ -1650,7 +1659,7 @@
         });
         if (!ok) return;
       }
-      const view = await api.createSession({ cwd: current.cwd, name: uniqueName(c.customTitle || basename(current.cwd)), resumeId: c.id });
+      const view = await api.createSession({ cwd: current.cwd, name: uniqueName(c.customTitle || basename(current.cwd)), resumeId: c.id, ...newTermSize() });
       closeModal();
       addSession(view);
       setActive(view.id);

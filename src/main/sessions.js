@@ -30,6 +30,7 @@ const IDLE = new Set(['ready', 'done']);
 const COLORS = ['blue', 'orange', 'green', 'pink', 'cyan', 'amber', 'violet', 'lime', 'red', 'teal', 'indigo', 'slate'];
 const cleanGroup = (g) => (typeof g === 'string' && g ? g.slice(0, 64) : null);
 const MAX_BUFFER = 512 * 1024;
+const termSize = (n, min, max, fallback) => (Number.isInteger(n) && n >= min && n <= max ? n : fallback);
 // A session may ask for a restart itself (to load a plugin); this keeps a confused one from looping.
 const SELF_RESTARTS_PER_HOUR = 6;
 
@@ -73,13 +74,14 @@ class SessionManager extends EventEmitter {
     this.emit('persist'); // badge colors given to sessions saved before there were any
   }
 
-  create({ cwd, name, resumeId }) {
+  /** `cols`/`rows`: the size of the pane it will show in, so Claude starts at the right size. */
+  create({ cwd, name, resumeId, cols, rows }) {
     if (typeof cwd !== 'string' || !cwd) throw new Error(this.t('session.invalidFolder'));
     if (resumeId) {
       const open = [...this.sessions.values()].find((s) => s.claudeSessionId === resumeId);
       if (open) return this.view(open);
     }
-    const s = this.add({ cwd, name: name || path.basename(cwd), claudeSessionId: resumeId || null, nameSince: Date.now() });
+    const s = this.add({ cwd, name: name || path.basename(cwd), claudeSessionId: resumeId || null, nameSince: Date.now(), cols, rows });
     this.spawn(s);
     this.emit('persist');
     return this.view(s);
@@ -108,8 +110,11 @@ class SessionManager extends EventEmitter {
       socket: null,
       pid: null,
       pty: null,
-      cols: 120,
-      rows: 32,
+      // The PTY's size. Kept between runs, so a restored session starts at the size it had.
+      cols: termSize(rec.cols, 2, 1000, 120),
+      rows: termSize(rec.rows, 2, 500, 32),
+      spawnSize: null, // the size the running process started at
+      sizeTimer: null,
       buffer: '',
       pending: '',
       flushTimer: null,
@@ -140,6 +145,7 @@ class SessionManager extends EventEmitter {
     if (Object.keys(s.plugins).length) settings.enabledPlugins = { ...s.plugins };
     fs.writeFileSync(settingsPath, JSON.stringify(settings));
     s.loadedPlugins = { ...s.plugins };
+    s.spawnSize = { cols: s.cols, rows: s.rows };
 
     let args;
     if (s.claudeSessionId && transcriptExists(s.cwd, s.claudeSessionId)) {
@@ -224,6 +230,7 @@ class SessionManager extends EventEmitter {
     s.restartWhenIdle = null;
     clearTimeout(s.idleTimer); s.idleTimer = null;
     clearTimeout(s.noteTimer); s.noteTimer = null;
+    clearTimeout(s.sizeTimer); s.sizeTimer = null;
     s.resumeNote = typeof note === 'string' ? note : '';
     s.buffer = '';
     s.pending = '';
@@ -242,6 +249,7 @@ class SessionManager extends EventEmitter {
     clearTimeout(s.flushTimer);
     clearTimeout(s.idleTimer);
     clearTimeout(s.noteTimer);
+    clearTimeout(s.sizeTimer);
     this.sessions.delete(id);
     for (const ext of ['.json', '.mcp.json']) {
       try { fs.rmSync(path.join(this.settingsDir, id + ext), { force: true }); } catch { /* ignore */ }
@@ -317,6 +325,25 @@ class SessionManager extends EventEmitter {
     if (s.pty) { try { s.pty.resize(cols, rows); } catch { /* exiting */ } }
   }
 
+  /**
+   * The pane's size can reach the PTY while Claude is still starting up, and Claude sometimes
+   * misses that change and keeps drawing at the size it was launched with (120x32, in a corner of
+   * the pane). If the size changed since the launch, send it again once Claude is up: one row
+   * less and back, since the same size again wouldn't tell it anything.
+   */
+  resendSizeIfChanged(s) {
+    const proc = s.pty;
+    if (!proc || !s.spawnSize || (s.spawnSize.cols === s.cols && s.spawnSize.rows === s.rows)) return;
+    s.spawnSize = { cols: s.cols, rows: s.rows };
+    clearTimeout(s.sizeTimer);
+    s.sizeTimer = setTimeout(() => {
+      s.sizeTimer = null;
+      if (s.pty !== proc || s.rows < 3) return;
+      try { proc.resize(s.cols, s.rows - 1); } catch { return; }
+      setTimeout(() => { if (s.pty === proc) { try { proc.resize(s.cols, s.rows); } catch { /* exiting */ } } }, 80);
+    }, 1500); // SessionStart comes a little before Claude's screen is up
+  }
+
   // ---- status ----------------------------------------------------------------------
 
   handleHook(terminalId, p) {
@@ -330,6 +357,7 @@ class SessionManager extends EventEmitter {
 
     switch (p.hook_event_name) {
       case 'SessionStart': {
+        if (p.source === 'startup' || p.source === 'resume') this.resendSizeIfChanged(s);
         // Auto-compaction restarts the session mid-turn; keep whatever we had.
         if (p.source !== 'compact') this.setStatus(s, 'ready');
         // On every start, resume, /clear and compaction, so it's never forgotten.
@@ -684,6 +712,8 @@ class SessionManager extends EventEmitter {
       plugins: s.plugins,
       admin: s.admin,
       adminDropped: s.adminDropped,
+      cols: s.cols,
+      rows: s.rows,
     }));
   }
 
