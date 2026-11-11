@@ -18,6 +18,7 @@ const { createMcpHandler } = require('./mcp');
 const { restartNote } = require('./restart-note');
 const i18n = require('../shared/i18n');
 const { userDataDir } = require('./user-data');
+const { AdminHost } = require('./admin');
 
 // How Windows identifies the app (taskbar grouping, notifications, Start menu).
 const AUMID = 'com.moictab.ccsessions';
@@ -42,6 +43,7 @@ let manager = null;
 let registry = null;
 let hooks = null;
 let messages = null;
+let admin = null;
 let activeId = null;
 let allowClose = false;
 const liveNotifications = new Set();
@@ -272,6 +274,7 @@ async function onClose(e) {
   win.hide(); // closing takes a moment: wait for the terminals out of sight
   registry.stop();
   await manager.killAll();
+  admin.close(); // the administrator helper exits with it
   startExitWatchdog();
   if (!win.isDestroyed()) win.close();
 }
@@ -327,6 +330,8 @@ function registerIpc() {
   ipcMain.handle('session:set-plugins', (_e, id, changes, opts) =>
     manager.setPlugins(id, changes, { by: 'user', notify: !!(opts && opts.notify) }));
   ipcMain.handle('session:cancel-restart', (_e, id) => manager.cancelPendingRestart(id));
+  ipcMain.handle('session:set-admin', (_e, id, on, opts) =>
+    manager.setAdmin(id, on === true, { note: opts && opts.notify ? restartNote(t, { bySession: false }) : '' }));
   ipcMain.handle('session:close', (_e, id) => manager.remove(id));
   ipcMain.handle('session:rename', (_e, id, name) => manager.rename(id, name));
   ipcMain.handle('session:clear-interrupted', (_e, id) => manager.clearInterrupted(id));
@@ -394,11 +399,15 @@ async function boot() {
     if (manager) manager.handleHook(terminalId, payload);
     if (messages) messages.handleHook(terminalId, payload);
   }, { onMcp: (terminalId, msg) => (mcp ? mcp(terminalId, msg) : null) });
+  // CC_SESSIONS_ADMIN_NO_ELEVATE: tests only, administrator sessions go through the helper
+  // without the Windows prompt (and so without administrator rights).
+  admin = new AdminHost({ electronPath: process.execPath, noElevate: !!process.env.CC_SESSIONS_ADMIN_NO_ELEVATE });
   manager = new SessionManager({
     claudePath: resolveClaude(),
     hooks,
     settingsDir: path.join(app.getPath('userData'), 'session-settings'),
     t,
+    admin,
   });
   mcp = createMcpHandler({ manager, version: app.getVersion() });
   messages = new MessageLog(

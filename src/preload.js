@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('ccsm', {
   sessionPlugins: (id) => ipcRenderer.invoke('session:plugins', id),
   setSessionPlugins: (id, changes, opts) => ipcRenderer.invoke('session:set-plugins', id, changes, opts),
   cancelRestart: (id) => ipcRenderer.invoke('session:cancel-restart', id),
+  setSessionAdmin: (id, on, opts) => ipcRenderer.invoke('session:set-admin', id, on, opts),
   closeSession: (id) => ipcRenderer.invoke('session:close', id),
   renameSession: (id, name) => ipcRenderer.invoke('session:rename', id, name),
   setSessionMeta: (id, patch) => ipcRenderer.invoke('session:set-meta', id, patch),

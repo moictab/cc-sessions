@@ -76,6 +76,7 @@
     modalRoot: $('#modal-root'),
     tbDot: $('#tb-dot'),
     tbMono: $('#tb-mono'),
+    tbAdmin: $('#tb-admin'),
     tbName: $('#tb-name'),
     tbPath: $('#tb-path'),
     tbStatus: $('#tb-status'),
@@ -144,6 +145,7 @@
   }
 
   function describe(v) {
+    if (v.parked) return { label: t('status.notStarted'), text: t('admin.needsApproval') };
     if (isInterrupted(v)) return { label: t('status.interrupted'), text: t('status.interruptedText') };
     switch (v.status) {
       case 'busy': return { label: t('status.busy'), text: v.lastPrompt ? t('common.quote', { text: oneLine(v.lastPrompt, 120) }) : '' };
@@ -152,7 +154,7 @@
       case 'done': return { label: t('status.done'), text: oneLine(v.lastReply) };
       case 'ready': return { label: t('status.ready'), text: v.lastPrompt ? t('common.quote', { text: oneLine(v.lastPrompt, 100) }) : '' };
       case 'exited': return { label: t('status.exited'), text: oneLine(v.detail) };
-      default: return { label: t('status.starting'), text: '' };
+      default: return { label: t('status.starting'), text: v.detail || '' }; // e.g. waiting for administrator approval
     }
   }
 
@@ -295,7 +297,7 @@
     //         ● status · detail
     //         path (only when the folder isn't named like the session)
     const row = el('div', 'sess-row');
-    row.append(el('span', 'sess-name'), el('span', 'sess-time'), el('kbd', 'sess-key'));
+    row.append(el('span', 'sess-name'), adminMark(), el('span', 'sess-time'), el('kbd', 'sess-key'));
     const status = el('div', 'sess-status');
     status.append(el('span', 'dot'), el('span', 'sess-detail'));
     li.append(el('span', 'mono'), row, status, el('div', 'sess-path'));
@@ -337,7 +339,7 @@
     pane.dataset.id = id;
 
     const head = el('div', 'pane-head');
-    head.append(el('span', 'dot'), el('span', 'mono'), el('span', 'pane-name'), el('span', 'pane-state'));
+    head.append(el('span', 'dot'), el('span', 'mono'), el('span', 'pane-name'), adminMark(), el('span', 'pane-state'));
     head.addEventListener('click', () => setActive(id));
 
     const banner = el('div', 'pane-banner');
@@ -398,6 +400,8 @@
     setBadge($('.mono', e.item), v);
     setBadge($('.pane-head .mono', e.pane), v);
     $('.sess-name', e.item).textContent = v.name;
+    $('.admin-mark', e.item).hidden = !v.admin;
+    $('.pane-head .admin-mark', e.pane).hidden = !v.admin;
     $('.sess-time', e.item).textContent = ago(v.statusSince);
     const path = $('.sess-path', e.item);
     path.textContent = shortPath(v.cwd);
@@ -415,7 +419,8 @@
 
     const exited = $('.pane-exited', e.pane);
     exited.hidden = v.status !== 'exited';
-    $('.msg', exited).textContent = v.detail ? t('status.endedDetail', { detail: v.detail }) : t('status.ended');
+    $('.msg', exited).textContent = v.parked ? t('admin.parked') : v.detail ? t('status.endedDetail', { detail: v.detail }) : t('status.ended');
+    $('.btn-primary', exited).textContent = v.admin ? t('admin.start') : t('exited.resume');
 
     if (v.id === ui.activeId) renderTopbar();
   }
@@ -428,6 +433,7 @@
     dom.tbDot.dataset.status = v.status;
     dom.tbDot.classList.toggle('interrupted', isInterrupted(v));
     setBadge(dom.tbMono, v);
+    dom.tbAdmin.hidden = !v.admin;
     if (!dom.tbName.querySelector('input')) dom.tbName.textContent = v.name;
     dom.tbPath.textContent = shortPath(v.cwd);
     dom.tbPath.title = t('topbar.openPath', { path: v.cwd });
@@ -498,6 +504,15 @@
   function sameName(name, cwd) {
     const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
     return norm(name) === norm(String(cwd || '').split(/[\\/]/).filter(Boolean).pop());
+  }
+
+  /** The shield next to the name of a session that runs as administrator. */
+  function adminMark() {
+    const s = el('span', 'admin-mark');
+    s.hidden = true;
+    s.title = t('admin.badgeTitle');
+    s.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.75 3 3.6v3.9c0 3.1 2.1 5.3 5 6.25 2.9-.95 5-3.15 5-6.25V3.6z"/></svg>';
+    return s;
   }
 
   function badge(view) {
@@ -818,6 +833,7 @@
       m.append(
         menuSep(),
         menuItem(t('menu.rename'), () => { setActive(id); startRename(); }),
+        menuItem(t('menu.runAsAdmin'), () => confirmAdmin(id, !e.view.admin), { checked: !!e.view.admin }),
         menuItem(t('menu.restart'), () => confirmRestart(id)),
         menuItem(t('menu.remove'), () => confirmClose(id), { danger: true }),
       );
@@ -1229,6 +1245,27 @@
       extra: notify.el,
     });
     if (ok) api.restartSession(id, { notify: notify.input.checked });
+  }
+
+  /** Run a session as administrator, or stop doing so: restarts it if it's running. */
+  async function confirmAdmin(id, on) {
+    const e = ui.sessions.get(id);
+    if (!e) return;
+    const running = e.view.status !== 'exited';
+    const working = ['busy', 'permission', 'input'].includes(e.view.status);
+    const notify = running ? notifyCheck() : null;
+    const parts = [];
+    if (working) parts.push(t('restart.working'));
+    if (on) parts.push(t(running ? 'admin.onRestart' : 'admin.onLater'), t('admin.risk'));
+    else if (running) parts.push(t('admin.offRestart'));
+    if (running) parts.push(t('restart.cost'));
+    const ok = await confirmModal({
+      title: t(on ? 'admin.onTitle' : 'admin.offTitle', { name: e.view.name }),
+      message: parts.join(' '),
+      confirmLabel: t(on ? 'admin.onConfirm' : 'admin.offConfirm'),
+      extra: notify ? notify.el : undefined,
+    });
+    if (ok) api.setSessionAdmin(id, on, { notify: !!(notify && notify.input.checked) });
   }
 
   function pluginStateText(p) {

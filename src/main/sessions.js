@@ -34,8 +34,10 @@ const SELF_RESTARTS_PER_HOUR = 6;
 
 class SessionManager extends EventEmitter {
   /** `t(key, vars)` translates into the interface language of the moment (see shared/i18n.js). */
-  constructor({ claudePath, hooks, settingsDir, t }) {
+  /** `admin`: an AdminHost (admin.js), for the sessions that run as administrator. */
+  constructor({ claudePath, hooks, settingsDir, t, admin = null }) {
     super();
+    this.admin = admin;
     this.t = typeof t === 'function' ? t : i18n.create(i18n.DEFAULT_LANGUAGE);
     this.claudePath = claudePath;
     this.hooks = hooks;
@@ -54,6 +56,14 @@ class SessionManager extends EventEmitter {
     for (const rec of records) {
       if (!rec || !rec.cwd) continue;
       const s = this.add(rec);
+      // Administrator sessions wait for you to start them: a Windows prompt shouldn't pop up
+      // on its own every time the app opens.
+      if (s.admin) {
+        s.parked = true;
+        s.status = 'exited';
+        this.emit('update', this.view(s));
+        continue;
+      }
       if (rec.exited) continue;
       // Stagger launches so a dozen sessions don't all boot in the same instant.
       setTimeout(() => this.spawn(s), delay);
@@ -103,6 +113,9 @@ class SessionManager extends EventEmitter {
       pending: '',
       flushTimer: null,
       plugins: plugins.sanitizeOverrides(rec.plugins), // per-session plugin overrides (persisted)
+      admin: !!rec.admin, // runs as administrator, through the helper in admin.js (persisted)
+      parked: false, // an administrator session restored but not started yet
+      elevated: null, // whether the running process really has administrator rights
       loadedPlugins: {}, // the overrides the running process was started with
       restartWhenIdle: null, // { change, note }: restart as soon as the current turn ends
       resumeNote: '', // typed into the session once it's back after a restart
@@ -153,25 +166,31 @@ class SessionManager extends EventEmitter {
       file = process.env.ComSpec || 'cmd.exe';
     }
 
+    const remote = s.admin && !!this.admin;
     let proc;
     try {
-      proc = pty.spawn(file, args, {
-        name: 'xterm-256color',
-        cols: s.cols,
-        rows: s.rows,
-        cwd: s.cwd,
-        env: sessionEnv(),
-        useConpty: true,
-      });
+      const opts = { name: 'xterm-256color', cols: s.cols, rows: s.rows, cwd: s.cwd, env: sessionEnv(), useConpty: true };
+      proc = remote ? this.admin.spawn(file, args, opts) : pty.spawn(file, args, opts);
     } catch (err) {
       return this.setStatus(s, 'exited', own('session.spawnFailed', { error: err.message }));
     }
 
     s.pty = proc;
-    s.pid = proc.pid;
+    s.pid = proc.pid || null; // an administrator session gets it once the helper has started it
+    s.parked = false;
+    s.elevated = remote ? null : false;
     s.exitCode = null;
+    if (remote) {
+      proc.onSpawn(({ pid, elevated }) => {
+        if (s.pty !== proc) return;
+        s.pid = pid;
+        s.elevated = elevated;
+        if (s.status === 'starting') this.setStatus(s, 'starting'); // drops "waiting for approval"
+        else this.emit('update', this.view(s));
+      });
+    }
     proc.onData((data) => this.onData(s, data));
-    proc.onExit(({ exitCode }) => {
+    proc.onExit(({ exitCode, error }) => {
       if (s.pty !== proc) return; // replaced by a restart
       s.pty = null;
       s.pid = null;
@@ -182,10 +201,10 @@ class SessionManager extends EventEmitter {
       if (s.restartWhenIdle) { s.resumeNote = s.restartWhenIdle.note; s.restartWhenIdle = null; }
       clearTimeout(s.idleTimer); s.idleTimer = null;
       s.exitCode = exitCode;
-      this.setStatus(s, 'exited', exitCode ? own('session.exitCode', { code: exitCode }) : '');
+      this.setStatus(s, 'exited', error ? own(error.key, error.vars) : exitCode ? own('session.exitCode', { code: exitCode }) : '');
       this.emit('persist');
     });
-    this.setStatus(s, 'starting');
+    this.setStatus(s, 'starting', remote && !proc.pid ? own('admin.waiting') : '');
   }
 
   /**
@@ -519,6 +538,23 @@ class SessionManager extends EventEmitter {
     this.emit('persist');
   }
 
+  /**
+   * Runs the session as administrator, or stops doing so. A running session restarts on the
+   * same conversation (and, to become administrator, goes through the Windows prompt); a closed
+   * one just keeps the choice for when it's started.
+   */
+  setAdmin(id, on, { note = '' } = {}) {
+    const s = this.sessions.get(id);
+    if (!s || typeof on !== 'boolean') return null;
+    if (s.admin === on) return this.view(s);
+    s.admin = on;
+    this.emit('persist');
+    if (s.pty) return this.restart(id, { note });
+    s.parked = on;
+    this.emit('update', this.view(s));
+    return this.view(s);
+  }
+
   // ---- queries ---------------------------------------------------------------------
 
   /** The least used badge color (ties: the earlier one in COLORS). */
@@ -626,6 +662,7 @@ class SessionManager extends EventEmitter {
       lastReply: s.lastReply,
       createdAt: s.createdAt,
       plugins: s.plugins,
+      admin: s.admin,
     }));
   }
 
@@ -647,6 +684,9 @@ class SessionManager extends EventEmitter {
       rows: s.rows,
       color: s.color,
       group: s.group,
+      admin: s.admin,
+      parked: s.parked, // administrator session restored, waiting for you to start it
+      elevated: s.elevated,
     };
   }
 }

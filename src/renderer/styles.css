@@ -590,3 +590,16 @@ span.peer { color: var(--muted); font-weight: 500; }
 }
 .session-list::-webkit-scrollbar-track, .font-list::-webkit-scrollbar-track, .switcher-list::-webkit-scrollbar-track,
 .proj-list::-webkit-scrollbar-track, .conv-list::-webkit-scrollbar-track, .mp-list::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Administrator sessions ---------- */
+:root { --admin: #f0717a; }
+.admin-mark { display: inline-flex; flex: none; align-self: center; color: var(--admin); }
+.admin-mark[hidden], .tb-admin[hidden] { display: none; }
+.admin-mark svg { width: 12px; height: 12px; stroke-width: 1.7; fill: color-mix(in srgb, var(--admin) 22%, transparent); }
+.tb-admin {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 7px 0 5px; border-radius: 10px;
+  color: var(--admin); font-size: 11px; font-weight: 600;
+  background: color-mix(in srgb, var(--admin) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--admin) 32%, transparent);
+}
+.tb-admin svg { width: 12px; height: 12px; stroke-width: 1.7; }
