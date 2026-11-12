@@ -124,7 +124,6 @@ Clic derecho en una sesión de la lista para su color, grupo, renombrar, reinici
 - Abrir en la app una conversación que sigue viva en otra terminal crea dos procesos sobre la misma conversación. La app te avisa antes.
 - Al contestar un permiso o una pregunta, el estado pasa a «Trabajando» al pulsar Enter, porque Claude no emite ningún hook en ese momento. Si contestaste «No», el registro lo corrige en unos segundos.
 - Los mensajes entre dos sesiones que están ambas fuera de la app no se ven.
-- Puede que los mensajes de sesiones normales no lleguen a una sesión de administrador: Windows no suele dejar que un proceso normal escriba en el canal de uno de administrador.
 - Solo se ha probado en Windows 11.
 
 ## Licencia
