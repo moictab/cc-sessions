@@ -126,6 +126,7 @@ Right-click a session in the list for its color, group, rename, restart and remo
 - Opening in the app a conversation that's still alive in another terminal creates two processes on the same conversation. The app warns you first.
 - When you answer a permission prompt or a question, the status switches to "Working" as soon as you press Enter, because Claude emits no hook at that moment. If you answered "No", the registry corrects it within a few seconds.
 - Messages between two sessions that are both outside the app aren't visible.
+- Normal sessions can't connect to an administrator session's message pipe (Windows refuses it), so their messages reach it only through Remote Control, while it's on for that session. Its own messages to them get through as usual.
 - Only tested on Windows 11.
 
 ## License

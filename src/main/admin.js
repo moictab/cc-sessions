@@ -266,8 +266,9 @@ function adminContext({ elevated = true, dropped = false } = {}) {
     'CC Sessions and accepted the Windows (UAC) prompt. Commands you run have full administrator rights with no further prompts, ' +
     'and programs you start run elevated too, so be deliberate with system-wide changes (services, drivers, the registry, ' +
     'security settings, installing or removing software). Files you create may end up owned by the Administrators group. ' +
-    'Messages with other sessions (SendMessage) work both ways as usual. If you no longer need administrator rights, ' +
-    "tell the user: they can turn it off from this session's menu in CC Sessions.";
+    "Windows doesn't let non-elevated sessions connect to your local message pipe, so their messages (SendMessage) reach you " +
+    'only through Remote Control, while it is on for this session; your messages to them get through as usual. ' +
+    "If you no longer need administrator rights, tell the user: they can turn it off from this session's menu in CC Sessions.";
 }
 
 module.exports = { AdminHost, adminContext };
