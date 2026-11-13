@@ -115,6 +115,7 @@ class SessionManager extends EventEmitter {
       statusSince: Date.now(),
       exitCode: null,
       pendingTool: '',
+      pendingToolName: '',
       peerName: null,
       socket: null,
       pid: null,
@@ -434,6 +435,7 @@ class SessionManager extends EventEmitter {
       }
       case 'PreToolUse':
         s.pendingTool = describeTool(p.tool_name, p.tool_input);
+        s.pendingToolName = p.tool_name || '';
         if (p.tool_name === 'AskUserQuestion') this.setStatus(s, 'input', firstQuestion(p.tool_input) || own('session.asking'));
         else if (p.tool_name === 'ExitPlanMode') this.setStatus(s, 'input', own('session.plan'));
         break;
@@ -451,6 +453,10 @@ class SessionManager extends EventEmitter {
       }
       case 'Notification': {
         const kind = classifyNotification(p);
+        // A question or a plan to approve also comes with a "permission" notice: it stays a question,
+        // with its text, instead of turning into "Needs permission · AskUserQuestion".
+        const asking = s.status === 'input' && (s.pendingToolName === 'AskUserQuestion' || s.pendingToolName === 'ExitPlanMode');
+        if (kind === 'permission' && asking) break;
         if (kind === 'permission') this.setStatus(s, 'permission', s.pendingTool || p.message || '');
         else if (kind === 'idle') {
           if (!['done', 'ready', 'permission', 'input'].includes(s.status)) this.setStatus(s, 'done', p.message || '');
