@@ -135,4 +135,34 @@ async function listConversations(cwd, limit = 30) {
   return out;
 }
 
-module.exports = { listProjects, listConversations };
+const REPLIES_BYTES = 1024 * 1024;
+
+/**
+ * What a session has said since the user last wrote to it: the text of its messages, oldest first,
+ * from the end of its transcript, only those written after `after` (ms). CC Sessions' notes and
+ * other sessions' messages don't count as the user writing. Lets the app find a decision the
+ * session asked for in the middle of a turn, or before the app could see it.
+ */
+async function repliesSinceUser(cwd, sessionId, after = 0) {
+  if (!cwd || !sessionId) return [];
+  const file = path.join(projectDirFor(cwd), sessionId + '.jsonl');
+  let st;
+  try { st = await fsp.stat(file); } catch { return []; }
+  const start = Math.max(0, st.size - REPLIES_BYTES);
+  const tail = await readSlice(file, start, Math.min(REPLIES_BYTES, st.size));
+  let out = [];
+  for (const e of jsonLines(tail, start > 0)) {
+    const u = userText(e);
+    if (u !== null) {
+      if (!u.startsWith('[CC Sessions]') && !u.includes('<cross-session-message')) out = []; // the user wrote
+      continue;
+    }
+    if (e.type !== 'assistant' || e.isSidechain || !e.message || !Array.isArray(e.message.content)) continue;
+    if (!(Date.parse(e.timestamp) > after)) continue;
+    const text = e.message.content.filter((p) => p && p.type === 'text' && p.text).map((p) => p.text).join('\n');
+    if (text) out.push(text);
+  }
+  return out;
+}
+
+module.exports = { listProjects, listConversations, repliesSinceUser };

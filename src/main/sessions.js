@@ -21,6 +21,7 @@ const { parseEnvelopes } = require('./messages');
 const plugins = require('./plugins');
 const { restartNote } = require('./restart-note');
 const { adminContext } = require('./admin');
+const { repliesSinceUser } = require('./claude-history');
 const i18n = require('../shared/i18n');
 
 const ATTENTION = new Set(['permission', 'input', 'done']);
@@ -71,6 +72,7 @@ class SessionManager extends EventEmitter {
         this.emit('update', this.view(s));
         continue;
       }
+      if (!s.decision && s.waitingSince) this.recoverDecision(s); // asked before the app could see it
       if (rec.exited) continue;
       // Stagger launches so a dozen sessions don't all boot in the same instant.
       setTimeout(() => this.spawn(s), delay);
@@ -142,6 +144,8 @@ class SessionManager extends EventEmitter {
       // turns, but only the user's own prompt answers.
       waitingSince: Number(rec.waitingSince) > 0 ? Number(rec.waitingSince) : null,
       decision: cleanDecision(rec.decision), // { text, since } | null (see also the end of add())
+      // When the user last took it off the inbox: what it asked before that doesn't come back.
+      dismissedAt: Number(rec.dismissedAt) > 0 ? Number(rec.dismissedAt) : 0,
       bracketedPaste: false, // the terminal asked for pastes to be marked (ESC[?2004h)
       guard: [], // image-guard windows open in this session, oldest first: [{ at, until }]
       guardTimer: null,
@@ -453,6 +457,9 @@ class SessionManager extends EventEmitter {
         // A turn without that line keeps the decision: it may have been answering another
         // session's message, and the user still hasn't said anything.
         if (!s.waitingSince) s.waitingSince = Date.now();
+        // It may have asked earlier in the turn and gone on with something else, as the rule says
+        // to: its other messages are in the transcript.
+        if (!s.decision) setTimeout(() => this.recoverDecision(s), 1000);
         // Before setStatus: for a request still queued, the end of this turn is when it gets typed.
         if (s.wind && s.wind.state === 'delivered') this.windAnswered(s);
         this.setStatus(s, 'done');
@@ -495,7 +502,30 @@ class SessionManager extends EventEmitter {
   /** The user takes it off the inbox without answering (dealt with elsewhere, or stale). */
   dismissWaiting(id) {
     const s = this.sessions.get(id);
-    if (s) this.clearWaiting(s);
+    if (!s) return;
+    s.dismissedAt = Date.now();
+    this.clearWaiting(s);
+    this.emit('persist');
+  }
+
+  /**
+   * Looks in the transcript for a decision the session asked for since the user last wrote to it
+   * (and since they last took it off the list): the newest one wins. For a card written in the
+   * middle of a turn, and for what was asked before this version of the app could recognize it.
+   */
+  async recoverDecision(s) {
+    let texts = [];
+    try { texts = await repliesSinceUser(s.cwd, s.claudeSessionId, s.dismissedAt); } catch { return; }
+    // Something newer may have come in meanwhile: a decision, or the user's answer.
+    if (s.decision || !s.waitingSince || this.sessions.get(s.id) !== s) return;
+    for (let k = texts.length - 1; k >= 0; k--) {
+      const asked = findDecision(texts[k]);
+      if (!asked) continue;
+      s.decision = { text: asked, since: s.waitingSince };
+      this.emit('update', this.view(s));
+      this.emit('persist');
+      return;
+    }
   }
 
   /**
@@ -948,6 +978,7 @@ class SessionManager extends EventEmitter {
       waitingSince: s.waitingSince,
       decision: s.decision,
       fullReply: s.fullReply,
+      dismissedAt: s.dismissedAt,
     }));
   }
 
