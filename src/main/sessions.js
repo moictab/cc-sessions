@@ -179,6 +179,9 @@ class SessionManager extends EventEmitter {
     const settingsPath = path.join(this.settingsDir, s.id + '.json');
     const settings = { ...this.hooks.settingsFor(s.id) };
     if (Object.keys(s.plugins).length) settings.enabledPlugins = { ...s.plugins };
+    // Agent view off: there, ← on an empty prompt sends the conversation to the background, out
+    // of this terminal and out of the app. (`claude agents` in a terminal of your own still works.)
+    settings.disableAgentView = true;
     fs.writeFileSync(settingsPath, JSON.stringify(settings));
     s.loadedPlugins = { ...s.plugins };
     s.spawnSize = { cols: s.cols, rows: s.rows };
