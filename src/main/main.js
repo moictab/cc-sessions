@@ -424,7 +424,10 @@ async function boot() {
     const out = manager ? manager.handleHook(terminalId, payload) : null; // what the hook prints back, if anything
     if (messages) messages.handleHook(terminalId, payload);
     return out;
-  }, { onMcp: (terminalId, msg) => (mcp ? mcp(terminalId, msg) : null) });
+  }, {
+    onMcp: (terminalId, msg) => (mcp ? mcp(terminalId, msg) : null),
+    onGuard: (terminalId, body) => { if (manager) manager.guardNotice(terminalId, body); },
+  });
   // CC_SESSIONS_ADMIN_NO_ELEVATE: tests only, administrator sessions go through the helper
   // without the Windows prompt (and so without administrator rights).
   admin = new AdminHost({ electronPath: process.execPath, noElevate: !!process.env.CC_SESSIONS_ADMIN_NO_ELEVATE });

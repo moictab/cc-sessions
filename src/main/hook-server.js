@@ -3,7 +3,8 @@
 // Each session gets a settings file whose hooks run:
 //   curl.exe ... --data-binary "@-" http://127.0.0.1:<port>/hook/<terminalId>
 // so we know exactly which terminal an event belongs to.
-// The same server answers our MCP server at /mcp/<terminalId> (see mcp.js).
+// The same server answers our MCP server at /mcp/<terminalId> (see mcp.js), and image-guard's
+// notices at /guard/<terminalId> (see guardEnvFor below).
 
 const http = require('http');
 const crypto = require('crypto');
@@ -18,12 +19,19 @@ const HOOK_EVENTS = {
   Stop: null,
 };
 
-function startHookServer(onEvent, { onMcp } = {}) {
+function startHookServer(onEvent, { onMcp, onGuard } = {}) {
   const token = crypto.randomBytes(16).toString('hex');
+  // A token of its own: it sits in the sessions' environment, where anything they run can read it,
+  // and all it lets through is these notices.
+  const guardToken = crypto.randomBytes(16).toString('hex');
 
   const server = http.createServer((req, res) => {
     const mcp = /^\/mcp\/([A-Za-z0-9-]+)$/.exec(req.url || '');
     if (mcp && onMcp && req.headers['x-cc-sessions-token'] === token) return serveMcp(req, res, mcp[1], onMcp);
+    const guard = /^\/guard\/([A-Za-z0-9-]+)$/.exec(req.url || '');
+    if (guard && onGuard && req.method === 'POST' && req.headers['x-cc-sessions-token'] === guardToken) {
+      return serveGuard(req, res, guard[1], onGuard);
+    }
     const match = /^\/hook\/([A-Za-z0-9-]+)$/.exec(req.url || '');
     if (req.method !== 'POST' || !match || req.headers['x-cc-sessions-token'] !== token) {
       res.writeHead(403);
@@ -62,6 +70,10 @@ function startHookServer(onEvent, { onMcp } = {}) {
         token,
         close: () => server.close(),
         settingsFor: (terminalId) => buildSettings(port, token, terminalId),
+        guardEnvFor: onGuard ? (terminalId) => ({
+          CC_SESSIONS_GUARD_URL: `http://127.0.0.1:${port}/guard/${terminalId}`,
+          CC_SESSIONS_GUARD_TOKEN: guardToken,
+        }) : null,
         mcpConfigFor: onMcp ? (terminalId) => buildMcpConfig(port, token, terminalId) : null,
       });
     });
@@ -102,6 +114,29 @@ function serveMcp(req, res, terminalId, onMcp) {
     }
     if (!out.length) { res.writeHead(202); res.end(); return; }
     sendJson(res, 200, batch ? out : out[0]);
+  });
+}
+
+/**
+ * image-guard tells us when its consent window opens and closes in a session, so the inbox can
+ * show that the session is waiting for the user: {"event": "open" | "close", "until": ms}, where
+ * `until` (optional) is when its hook gives the window up. It sends and doesn't wait, so: answer
+ * right away, with nothing in the body.
+ */
+function serveGuard(req, res, terminalId, onGuard) {
+  const chunks = [];
+  let size = 0;
+  req.on('data', (chunk) => {
+    size += chunk.length;
+    if (size > 4096) req.destroy();
+    else chunks.push(chunk);
+  });
+  req.on('end', () => {
+    res.writeHead(204);
+    res.end();
+    let body = null;
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return; }
+    try { onGuard(terminalId, body); } catch (err) { console.error('[guard] handler error', err); }
   });
 }
 

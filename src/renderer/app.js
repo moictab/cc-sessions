@@ -150,14 +150,24 @@
     return !!v.decision && (v.status === 'done' || v.status === 'ready');
   }
 
-  /** The status the dot and the label are drawn with: a pending decision looks like a question. */
+  /** An image-guard window waits for your consent (the session itself looks busy meanwhile). */
+  function guardOpen(v) {
+    return !!v.guard && v.status !== 'exited';
+  }
+
+  /**
+   * The status the dot and the label are drawn with: an image-guard window looks like a permission
+   * prompt, and a pending decision like a question.
+   */
   function shown(v) {
+    if (guardOpen(v)) return 'permission';
     return decisionPending(v) ? 'input' : v.status;
   }
 
   function describe(v) {
     if (v.parked) return { label: t('status.notStarted'), text: t('admin.needsApproval') };
     if (isInterrupted(v)) return { label: t('status.interrupted'), text: t('status.interruptedText') };
+    if (guardOpen(v)) return { label: t('status.guard'), text: t('status.guardText') };
     if (decisionPending(v)) return { label: t('status.decision'), text: oneLine(v.decision.text) };
     switch (v.status) {
       case 'busy': return { label: t('status.busy'), text: v.lastPrompt ? t('common.quote', { text: oneLine(v.lastPrompt, 120) }) : '' };
@@ -481,7 +491,7 @@
   function updateAttention() {
     let n = 0;
     for (const e of ui.sessions.values()) {
-      if (e.view.status === 'permission' || e.view.status === 'input' || e.unseen || decisionPending(e.view)) n++;
+      if (e.view.status === 'permission' || e.view.status === 'input' || e.unseen || decisionPending(e.view) || guardOpen(e.view)) n++;
     }
     dom.attn.hidden = n === 0;
     dom.attn.textContent = String(n);
@@ -554,7 +564,7 @@
 
   function needsYou(e) {
     const s = e.view.status;
-    return s === 'permission' || s === 'input' || (s === 'done' && e.unseen) || decisionPending(e.view) || ui.stickyId === e.id;
+    return s === 'permission' || s === 'input' || (s === 'done' && e.unseen) || decisionPending(e.view) || guardOpen(e.view) || ui.stickyId === e.id;
   }
 
   /** What the list shows: [{ key, title, ids, collapsible, collapsed, group }]. A null title: no header. */

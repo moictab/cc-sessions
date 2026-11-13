@@ -35,6 +35,8 @@ const termSize = (n, min, max, fallback) => (Number.isInteger(n) && n >= min && 
 const SELF_RESTARTS_PER_HOUR = 6;
 // Every note the app types into a session starts like this: a prompt that does is not the user's.
 const APP_NOTE = '[CC Sessions]';
+// The longest an image-guard window can stay open: Claude Code kills a hook after this long.
+const GUARD_MAX_MS = 3700 * 1000;
 
 class SessionManager extends EventEmitter {
   /** `t(key, vars)` translates into the interface language of the moment (see shared/i18n.js). */
@@ -138,6 +140,8 @@ class SessionManager extends EventEmitter {
       waitingSince: Number(rec.waitingSince) > 0 ? Number(rec.waitingSince) : null,
       decision: cleanDecision(rec.decision), // { text, since } | null
       bracketedPaste: false, // the terminal asked for pastes to be marked (ESC[?2004h)
+      guard: [], // image-guard windows open in this session, oldest first: [{ at, until }]
+      guardTimer: null,
       idleTimer: null,
       noteTimer: null,
       selfRestarts: [],
@@ -189,12 +193,15 @@ class SessionManager extends EventEmitter {
     const remote = s.admin && !!this.admin;
     let proc;
     try {
-      const opts = { name: 'xterm-256color', cols: s.cols, rows: s.rows, cwd: s.cwd, env: sessionEnv(), useConpty: true };
+      // Where image-guard's hook tells us about its windows (see guardNotice()).
+      const env = { ...sessionEnv(), ...(this.hooks.guardEnvFor ? this.hooks.guardEnvFor(s.id) : {}) };
+      const opts = { name: 'xterm-256color', cols: s.cols, rows: s.rows, cwd: s.cwd, env, useConpty: true };
       proc = remote ? this.admin.spawn(file, args, opts) : pty.spawn(file, args, opts);
     } catch (err) {
       return this.setStatus(s, 'exited', own('session.spawnFailed', { error: err.message }));
     }
 
+    this.clearGuard(s); // the old process's hooks went with it
     s.pty = proc;
     s.pid = proc.pid || null; // an administrator session gets it once the helper has started it
     s.parked = false;
@@ -222,6 +229,7 @@ class SessionManager extends EventEmitter {
       // resumed, and the note still tells the session what happened.
       if (s.restartWhenIdle) { s.resumeNote = s.restartWhenIdle.note; s.restartWhenIdle = null; }
       clearTimeout(s.idleTimer); s.idleTimer = null;
+      this.clearGuard(s);
       s.exitCode = exitCode;
       this.setStatus(s, 'exited', error ? own(error.key, error.vars) : exitCode ? own('session.exitCode', { code: exitCode }) : '');
       this.emit('persist');
@@ -262,6 +270,7 @@ class SessionManager extends EventEmitter {
     clearTimeout(s.idleTimer);
     clearTimeout(s.noteTimer);
     clearTimeout(s.sizeTimer);
+    clearTimeout(s.guardTimer);
     this.clearWind(s);
     this.sessions.delete(id);
     for (const ext of ['.json', '.mcp.json']) {
@@ -487,6 +496,52 @@ class SessionManager extends EventEmitter {
     if (body.includes('\n')) body = s.bracketedPaste ? `\x1b[200~${body}\x1b[201~` : body.replace(/\s*\n\s*/g, ' ');
     this.typeNote(s, body);
     return { ok: true };
+  }
+
+  // ---- image-guard's consent windows ----------------------------------------------------
+
+  /**
+   * image-guard's hook tells us when its window opens and closes ({ event, until }). While one is
+   * open the session waits for the user, though its status says it's working (the hook is running).
+   * Only counted: several can be open at once, and a close whose open got lost is ignored. Each
+   * one is dropped when its hook gives up on it (`until`), or at the latest when Claude Code
+   * would kill the hook, in case the close never comes.
+   */
+  guardNotice(id, body) {
+    const s = this.sessions.get(id);
+    if (!s || !s.pty || !body || typeof body !== 'object') return;
+    const now = Date.now();
+    if (body.event === 'open') {
+      const until = Number(body.until);
+      s.guard.push({ at: now, until: until > now && until < now + GUARD_MAX_MS ? until : now + GUARD_MAX_MS });
+    } else if (body.event === 'close') {
+      if (!s.guard.length) return;
+      s.guard.shift();
+    } else {
+      return;
+    }
+    this.guardChanged(s);
+  }
+
+  /** After a change: drop what has expired, wake up for the next to expire, tell the UI. */
+  guardChanged(s) {
+    const now = Date.now();
+    s.guard = s.guard.filter((g) => g.until > now);
+    clearTimeout(s.guardTimer);
+    s.guardTimer = null;
+    if (s.guard.length) {
+      const next = Math.min(...s.guard.map((g) => g.until));
+      s.guardTimer = setTimeout(() => this.guardChanged(s), Math.max(1000, next - now + 50));
+    }
+    this.emit('update', this.view(s));
+  }
+
+  clearGuard(s) {
+    clearTimeout(s.guardTimer);
+    s.guardTimer = null;
+    if (!s.guard.length) return;
+    s.guard = [];
+    this.emit('update', this.view(s));
   }
 
   /** Cross-check with ~/.claude/sessions: fixes missed hooks and tracks /clear. */
@@ -901,6 +956,7 @@ class SessionManager extends EventEmitter {
       elevated: s.elevated,
       waitingSince: s.waitingSince, // your turn since then (null: you've had the last word)
       decision: s.decision, // { text, since }: the decision it asked you for
+      guard: s.guard.length ? { count: s.guard.length, since: s.guard[0].at } : null, // image-guard windows open
     };
   }
 }
