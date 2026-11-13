@@ -141,7 +141,7 @@ class SessionManager extends EventEmitter {
       // for, if it did (see findDecision()). Notes of ours and other sessions' messages also start
       // turns, but only the user's own prompt answers.
       waitingSince: Number(rec.waitingSince) > 0 ? Number(rec.waitingSince) : null,
-      decision: cleanDecision(rec.decision), // { text, since } | null
+      decision: cleanDecision(rec.decision), // { text, since } | null (see also the end of add())
       bracketedPaste: false, // the terminal asked for pastes to be marked (ESC[?2004h)
       guard: [], // image-guard windows open in this session, oldest first: [{ at, until }]
       guardTimer: null,
@@ -149,6 +149,12 @@ class SessionManager extends EventEmitter {
       noteTimer: null,
       selfRestarts: [],
     };
+    // Still the user's turn, but nothing recorded as asked: maybe its last answer asks in a way
+    // this version recognizes and the one that saved it didn't (a "Pendiente de ti" block).
+    if (!s.decision && s.waitingSince && s.fullReply) {
+      const asked = findDecision(s.fullReply);
+      if (asked) s.decision = { text: asked, since: s.waitingSince };
+    }
     this.sessions.set(s.id, s);
     this.emit('update', this.view(s));
     return s;
@@ -1004,32 +1010,67 @@ function describeTool(name, input) {
 }
 
 /**
- * The decision a session asks the user for, from the text of its turn. The rule in the user's
- * global CLAUDE.md has it write, on a line of its own:
+ * What a session asks the user for, from the text of its turn. The rule in the user's global
+ * CLAUDE.md has it write, on a line of its own:
  *   [project] Necesito tu decisión: <the question>
- * Found anywhere in the message, and despite the markup the rule asks not to use (quote marks,
- * bold, inline code, a list bullet). Not inside a code block, and not the rule's own example
- * ("[tu-proyecto]", or no question), so quoting the rule doesn't count.
+ * and, when what it waits for changes, a block:
+ *   Pendiente de ti:
+ *   - D5: <…>
+ *   - D6: <…>
+ * The line wins; otherwise the block's items, one per line. Found anywhere in the message, and
+ * despite the markup the rule asks not to use (quote marks, bold, inline code, a heading or list
+ * bullet). Not inside a code block, and not the rule's own example ("[tu-proyecto]", no question,
+ * "Pendiente de ti: nada"), so quoting the rule doesn't count.
  */
 const DECISION_LINE = /^\[([^\]\n]{1,80})\]\s*necesito\s+tu\s+decisi[oó]n\s*:\s*(.+)$/iu;
+const PENDING_HEAD = /^pendiente\s+de\s+ti\s*[:：.]?\s*(.*)$/iu;
+const PENDING_NONE = /^(nada|ningun[oa]?|ningún|sin\s+pendientes)\b|^[-—–]$/iu;
+const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+(.*)$/;
+
+/** A line as a session meant it, without the markup around it. */
+function plainLine(raw) {
+  return raw
+    .replace(/[*`]/g, '')
+    .replace(/^\s*(?:>\s*)+/, '')
+    .replace(/^\s*#{1,6}\s+/, '')
+    .replace(/^\s*(?:[-+•]|\d+[.)])\s+/, '')
+    .replace(/^\s*_+|_+\s*$/g, '')
+    .trim();
+}
 
 function findDecision(message) {
+  const lines = [];
   let fenced = false;
   for (const raw of String(message || '').split(/\r?\n/)) {
-    if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; continue; }
-    if (fenced) continue;
-    const line = raw
-      .replace(/[*`]/g, '')
-      .replace(/^\s*(?:>\s*)+/, '')
-      .replace(/^\s*(?:[-+•]|\d+[.)])\s+/, '')
-      .replace(/^\s*_+|_+\s*$/g, '')
-      .trim();
-    const m = DECISION_LINE.exec(line);
+    if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; lines.push(null); continue; }
+    lines.push(fenced ? null : raw); // null: inside a code block, or a fence
+  }
+  for (const raw of lines) {
+    if (raw === null) continue;
+    const m = DECISION_LINE.exec(plainLine(raw));
     if (!m) continue;
     const project = m[1].trim().toLowerCase();
     const question = m[2].trim();
     if (project === 'tu-proyecto' || project === 'proyecto' || !question.replace(/[¿?….\s]/g, '')) continue;
     return question.slice(0, 500);
+  }
+  for (let k = 0; k < lines.length; k++) {
+    if (lines[k] === null) continue;
+    const head = PENDING_HEAD.exec(plainLine(lines[k]));
+    if (!head) continue;
+    const items = [];
+    if (head[1]) items.push(head[1]);
+    for (let j = k + 1; j < lines.length; j++) {
+      const raw = lines[j];
+      if (raw === null) break;
+      if (!raw.trim()) { if (items.length) break; continue; } // a blank line may follow the heading
+      const li = LIST_ITEM.exec(raw);
+      if (li) items.push(plainLine(li[1]));
+      else if (/^\s{2,}\S/.test(raw) && items.length) items[items.length - 1] += ' ' + plainLine(raw);
+      else break;
+    }
+    const real = items.map((x) => x.trim()).filter((x) => x && !PENDING_NONE.test(x));
+    if (real.length) return real.join('\n').slice(0, 500);
   }
   return '';
 }
