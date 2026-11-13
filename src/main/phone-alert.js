@@ -18,7 +18,7 @@ function pressingWait(v) {
   if (v.status === 'exited' || v.parked) return null;
   if (v.guard) return { kind: 'guard', since: v.guard.since };
   if (v.status === 'permission' || v.status === 'input') return { kind: v.status, since: v.statusSince };
-  if (v.decision) return { kind: 'decision', since: v.decision.since };
+  if (v.asks && v.asks.length) return { kind: 'decision', since: Math.min(...v.asks.map((a) => a.since)) };
   return null;
 }
 

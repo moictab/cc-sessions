@@ -155,9 +155,15 @@
     return v.interrupted && (v.status === 'ready' || v.status === 'starting' || v.status === 'done');
   }
 
-  /** Between turns with a decision asked of you (see findDecision() in sessions.js). */
+  /** Between turns with something it asked you to decide (see findAsks() in sessions.js). */
   function decisionPending(v) {
-    return !!v.decision && (v.status === 'done' || v.status === 'ready');
+    return !!(v.asks && v.asks.length) && (v.status === 'done' || v.status === 'ready');
+  }
+
+  /** What it asks, in one line: the question, or how many and which ("3 decisions: D5, D6, …"). */
+  function asksText(asks) {
+    if (asks.length === 1) return oneLine(asks[0].text);
+    return t('status.decisionsText', { n: asks.length, list: asks.map((a) => a.label || a.topic || oneLine(a.text, 30)).join(', ') });
   }
 
   /** An image-guard window waits for your consent (the session itself looks busy meanwhile). */
@@ -178,7 +184,7 @@
     if (v.parked) return { label: t('status.notStarted'), text: t('admin.needsApproval') };
     if (isInterrupted(v)) return { label: t('status.interrupted'), text: t('status.interruptedText') };
     if (guardOpen(v)) return { label: t('status.guard'), text: t('status.guardText') };
-    if (decisionPending(v)) return { label: t('status.decision'), text: oneLine(v.decision.text) };
+    if (decisionPending(v)) return { label: t('status.decision'), text: asksText(v.asks) };
     switch (v.status) {
       case 'busy': return { label: t('status.busy'), text: v.lastPrompt ? t('common.quote', { text: oneLine(v.lastPrompt, 120) }) : '' };
       case 'permission': return { label: t('status.permission'), text: permissionText(v.detail) };
@@ -321,7 +327,7 @@
     renderSidebar();
     layout();
     updateAttention();
-    ui.inboxCards.delete(id);
+    for (const key of [...ui.inboxCards.keys()]) if (key === id || key.startsWith(id + '|')) ui.inboxCards.delete(key);
     renderInbox();
   }
 
@@ -2082,17 +2088,18 @@
   // ---------------------------------------------------------------- inbox: what's waiting for you
 
   /**
-   * What a session waits for from you, the most pressing thing only, and since when; null if
-   * nothing. "done" (a finished turn you haven't answered) goes in a folded list of its own.
+   * What a session waits for from you, and since when: the most pressing thing, or one card per
+   * question it asked you to decide. "done" (a finished turn you haven't answered) goes in a
+   * folded list of its own.
    */
   function waitingFor(v) {
-    if (v.status === 'exited' || v.parked) return null;
-    if (guardOpen(v)) return { kind: 'guard', since: v.guard.since };
-    if (v.status === 'permission') return { kind: 'permission', since: v.statusSince };
-    if (v.status === 'input') return { kind: 'input', since: v.statusSince };
-    if (v.decision) return { kind: 'decision', since: v.decision.since };
-    if (v.waitingSince && (v.status === 'done' || v.status === 'ready')) return { kind: 'done', since: v.waitingSince };
-    return null;
+    if (v.status === 'exited' || v.parked) return [];
+    if (guardOpen(v)) return [{ kind: 'guard', since: v.guard.since }];
+    if (v.status === 'permission') return [{ kind: 'permission', since: v.statusSince }];
+    if (v.status === 'input') return [{ kind: 'input', since: v.statusSince }];
+    if (v.asks && v.asks.length) return v.asks.map((ask, i) => ({ kind: 'decision', since: ask.since, ask, first: i === 0 }));
+    if (v.waitingSince && (v.status === 'done' || v.status === 'ready')) return [{ kind: 'done', since: v.waitingSince }];
+    return [];
   }
 
   const INBOX_LABEL = {
@@ -2101,11 +2108,8 @@
 
   function renderInbox() {
     const items = [];
-    for (const e of ui.sessions.values()) {
-      const w = waitingFor(e.view);
-      if (w) items.push({ e, ...w });
-    }
-    items.sort((a, b) => a.since - b.since);
+    for (const e of ui.sessions.values()) for (const w of waitingFor(e.view)) items.push({ e, ...w });
+    items.sort((a, b) => a.since - b.since); // stable: a session's questions keep their order
     const pressing = items.filter((x) => x.kind !== 'done');
     const done = items.filter((x) => x.kind === 'done');
     if (!ui.inboxOpen) return; // the counter in the header (updateAttention) says how many need you
@@ -2130,17 +2134,19 @@
 
   function inboxCard(x) {
     const v = x.e.view;
-    let c = ui.inboxCards.get(v.id);
+    const key = x.ask ? `${v.id}|${x.ask.key}` : v.id;
+    let c = ui.inboxCards.get(key);
     if (!c || c.kind !== x.kind) {
-      c = buildInboxCard(v.id, x.kind);
-      ui.inboxCards.set(v.id, c);
+      c = buildInboxCard(v.id, x.kind, x.ask ? x.ask.key : null, !!x.first);
+      ui.inboxCards.set(key, c);
     }
     fillInboxCard(c, x);
     return c.li;
   }
 
-  function buildInboxCard(id, kind) {
-    const c = { id, kind, li: el('li', 'ib-card') };
+  /** `askKey`: the question a decision card is about; `first`: the session's first one. */
+  function buildInboxCard(id, kind, askKey, first) {
+    const c = { id, kind, askKey, li: el('li', 'ib-card') };
     c.li.dataset.kind = kind;
     const head = el('div', 'ib-head');
     c.badge = el('span', 'mono');
@@ -2158,8 +2164,9 @@
       c.ctx = el('div', 'ib-ctx');
       c.context.append(summary, c.ctx);
       c.context.addEventListener('toggle', () => { if (c.context.open) fillContext(c); });
-      // A decision's message is the card the session wrote for you (context, options): open.
-      c.context.open = kind === 'decision';
+      // A decision's message is the card the session wrote for you (context, options): open on
+      // its first question (the others share it).
+      c.context.open = kind === 'decision' && first;
       c.li.appendChild(c.context);
     }
     if (kind === 'decision') {
@@ -2184,7 +2191,7 @@
     if (kind === 'decision' || kind === 'done') {
       const dismiss = el('button', 'btn-secondary', t('inbox.dismiss'));
       dismiss.title = t('inbox.dismissTitle');
-      dismiss.addEventListener('click', () => api.dismissWaiting(id));
+      dismiss.addEventListener('click', () => api.dismissWaiting(id, askKey));
       actions.appendChild(dismiss);
     }
     if (kind === 'decision') {
@@ -2209,7 +2216,7 @@
     if (x.kind === 'guard') text = t('inbox.guardText');
     else if (x.kind === 'permission') text = [permissionText(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
     else if (x.kind === 'input') text = [oneLine(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
-    else if (x.kind === 'decision') text = v.decision.text;
+    else if (x.kind === 'decision') text = x.ask.text;
     else text = oneLine(v.lastReply, 240);
     if (c.text.textContent !== text) c.text.textContent = text;
     if (c.context && c.context.open) fillContext(c);
@@ -2390,7 +2397,7 @@
     if (!text || c.send.disabled) return;
     c.send.disabled = true;
     let r = null;
-    try { r = await api.replyTo(c.id, text); } catch { /* reported below */ }
+    try { r = await api.replyTo(c.id, text, c.askKey); } catch { /* reported below */ }
     if (r && r.ok) {
       c.ta.value = '';
       setInboxNote(c, t('inbox.sent'));

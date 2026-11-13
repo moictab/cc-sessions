@@ -72,7 +72,7 @@ class SessionManager extends EventEmitter {
         this.emit('update', this.view(s));
         continue;
       }
-      if (!s.decision && s.waitingSince) this.recoverDecision(s); // asked before the app could see it
+      if (!s.asks.length && s.waitingSince) this.recoverAsks(s); // asked before the app could see it
       if (rec.exited) continue;
       // Stagger launches so a dozen sessions don't all boot in the same instant.
       setTimeout(() => this.spawn(s), delay);
@@ -139,11 +139,13 @@ class SessionManager extends EventEmitter {
       resumeNote: typeof rec.resumeNote === 'string' ? rec.resumeNote.slice(0, 4000) : '',
       wind: null, // { kind: 'stop' | 'cancel', state, text, timer }: see windDownAll()
       // Waiting for the user (kept between runs): since when it's been their turn, that is, since
-      // the first turn that ended after their last prompt, and the decision the session asked them
-      // for, if it did (see findDecision()). Notes of ours and other sessions' messages also start
-      // turns, but only the user's own prompt answers.
+      // the first turn that ended after their last prompt, and what the session asked them to
+      // decide, one entry per question (see findAsks()). Notes of ours and other sessions'
+      // messages also start turns, but only the user's own prompt answers.
       waitingSince: Number(rec.waitingSince) > 0 ? Number(rec.waitingSince) : null,
-      decision: cleanDecision(rec.decision), // { text, since } | null (see also the end of add())
+      asks: cleanAsks(rec.asks, rec.decision), // [{ key, label, topic, text, since }] (see also the end of add())
+      asksFrom: 0, // when the message they came from was written (ms; 0: not known)
+      inboxReplies: [], // answers typed from the inbox and not seen yet: [{ text, key }] (see userAnswered())
       // When the user last took it off the inbox: what it asked before that doesn't come back.
       dismissedAt: Number(rec.dismissedAt) > 0 ? Number(rec.dismissedAt) : 0,
       bracketedPaste: false, // the terminal asked for pastes to be marked (ESC[?2004h)
@@ -155,9 +157,8 @@ class SessionManager extends EventEmitter {
     };
     // Still the user's turn, but nothing recorded as asked: maybe its last answer asks in a way
     // this version recognizes and the one that saved it didn't (a "Pendiente de ti" block).
-    if (!s.decision && s.waitingSince && s.fullReply) {
-      const asked = findDecision(s.fullReply);
-      if (asked) s.decision = { text: asked, since: s.waitingSince };
+    if (!s.asks.length && s.waitingSince && s.fullReply) {
+      s.asks = findAsks(s.fullReply).map((a) => ({ ...a, since: s.waitingSince }));
     }
     this.sessions.set(s.id, s);
     this.emit('update', this.view(s));
@@ -416,7 +417,7 @@ class SessionManager extends EventEmitter {
           s.lastPrompt = this.t('session.messageFrom', { name: e.fromName || this.t('session.anotherSession'), body: e.body }).slice(0, 2000);
         } else if (typeof p.prompt === 'string') {
           s.lastPrompt = p.prompt.slice(0, 2000);
-          if (!p.prompt.startsWith(APP_NOTE)) this.clearWaiting(s); // the user has answered
+          if (!p.prompt.startsWith(APP_NOTE)) this.userAnswered(s, p.prompt);
         }
         if (s.interrupted) { s.interrupted = false; this.emit('persist'); }
         this.setStatus(s, 'busy');
@@ -447,25 +448,27 @@ class SessionManager extends EventEmitter {
         } else if (kind === 'input') this.setStatus(s, 'input', p.message || own('session.waiting'));
         break;
       }
-      case 'Stop':
+      case 'Stop': {
+        let found = [];
         if (typeof p.last_assistant_message === 'string') {
           s.lastReply = p.last_assistant_message.slice(0, 2000);
           s.fullReply = p.last_assistant_message.slice(0, FULL_REPLY);
-          const asked = findDecision(p.last_assistant_message);
-          if (asked && (!s.decision || s.decision.text !== asked)) s.decision = { text: asked, since: Date.now() };
+          found = findAsks(p.last_assistant_message);
         }
-        // A turn without that line keeps the decision: it may have been answering another
-        // session's message, and the user still hasn't said anything.
+        if (found.length) this.setAsks(s, found);
+        // A turn whose last message asks nothing keeps what was asked: it may have been answering
+        // another session's message, and the user still hasn't said anything. But it may have
+        // asked earlier in the turn and gone on with something else, as the rule says to: its
+        // other messages are in the transcript.
+        else setTimeout(() => this.recoverAsks(s), 1000);
         if (!s.waitingSince) s.waitingSince = Date.now();
-        // It may have asked earlier in the turn and gone on with something else, as the rule says
-        // to: its other messages are in the transcript.
-        if (!s.decision) setTimeout(() => this.recoverDecision(s), 1000);
         // Before setStatus: for a request still queued, the end of this turn is when it gets typed.
         if (s.wind && s.wind.state === 'delivered') this.windAnswered(s);
         this.setStatus(s, 'done');
         this.onIdle(s); // also when we already thought it was idle (setStatus didn't change)
         this.emit('persist');
         break;
+      }
       default:
         break;
     }
@@ -486,9 +489,42 @@ class SessionManager extends EventEmitter {
   // ---- waiting for the user ------------------------------------------------------------
 
   clearWaiting(s) {
-    if (!s.waitingSince && !s.decision) return;
+    if (!s.waitingSince && !s.asks.length) return;
     s.waitingSince = null;
-    s.decision = null;
+    s.asks = [];
+    s.inboxReplies = [];
+    this.emit('update', this.view(s));
+    this.emit('persist');
+  }
+
+  /** What it asks now (from one message): the ones it asked before keep their age. */
+  setAsks(s, found, { since = Date.now(), from = Date.now() } = {}) {
+    const before = new Map(s.asks.map((a) => [a.key, a]));
+    s.asks = found.map((a) => ({ ...a, since: before.has(a.key) ? before.get(a.key).since : since }));
+    s.asksFrom = from;
+    this.emit('update', this.view(s));
+    this.emit('persist');
+  }
+
+  /**
+   * The user wrote to the session. What does it answer? An answer typed from the inbox answers its
+   * card; a prompt naming some of them ("D5: yes") answers those; anything else answers them all
+   * (if something is still open, the session lists it again, as the rule says to).
+   */
+  userAnswered(s, prompt) {
+    const said = squash(prompt);
+    const ours = s.inboxReplies.filter((r) => said.includes(r.text));
+    s.inboxReplies = s.inboxReplies.filter((r) => !ours.includes(r));
+    let answered = null; // keys; null: all of them
+    if (ours.length && ours.every((r) => r.key)) answered = new Set(ours.map((r) => r.key));
+    else {
+      const named = s.asks.filter((a) => a.label && new RegExp(`(^|[^\\p{L}\\p{N}])${a.label}($|[^\\p{L}\\p{N}])`, 'iu').test(prompt));
+      if (named.length) answered = new Set(named.map((a) => a.key));
+    }
+    const left = answered ? s.asks.filter((a) => !answered.has(a.key)) : [];
+    if (!s.waitingSince && left.length === s.asks.length) return;
+    s.asks = left;
+    s.waitingSince = null;
     this.emit('update', this.view(s));
     this.emit('persist');
   }
@@ -499,31 +535,38 @@ class SessionManager extends EventEmitter {
     return s ? { prompt: s.lastPrompt, reply: s.fullReply || s.lastReply } : null;
   }
 
-  /** The user takes it off the inbox without answering (dealt with elsewhere, or stale). */
-  dismissWaiting(id) {
+  /**
+   * The user takes one question (`key`) or the whole session off the inbox without answering
+   * (dealt with elsewhere, or stale). What it asked before this doesn't come back from the transcript.
+   */
+  dismissWaiting(id, key) {
     const s = this.sessions.get(id);
     if (!s) return;
     s.dismissedAt = Date.now();
-    this.clearWaiting(s);
+    if (key) {
+      s.asks = s.asks.filter((a) => a.key !== key);
+      this.emit('update', this.view(s));
+    } else {
+      this.clearWaiting(s);
+    }
     this.emit('persist');
   }
 
   /**
-   * Looks in the transcript for a decision the session asked for since the user last wrote to it
-   * (and since they last took it off the list): the newest one wins. For a card written in the
-   * middle of a turn, and for what was asked before this version of the app could recognize it.
+   * Looks in the transcript for what the session asked since the user last wrote to it (and since
+   * they last took something off the list): the newest message that asks wins. For a card written
+   * in the middle of a turn, and for what was asked before this version of the app could see it.
+   * Never replaces what came from a newer message.
    */
-  async recoverDecision(s) {
-    let texts = [];
-    try { texts = await repliesSinceUser(s.cwd, s.claudeSessionId, s.dismissedAt); } catch { return; }
-    // Something newer may have come in meanwhile: a decision, or the user's answer.
-    if (s.decision || !s.waitingSince || this.sessions.get(s.id) !== s) return;
-    for (let k = texts.length - 1; k >= 0; k--) {
-      const asked = findDecision(texts[k]);
-      if (!asked) continue;
-      s.decision = { text: asked, since: s.waitingSince };
-      this.emit('update', this.view(s));
-      this.emit('persist');
+  async recoverAsks(s) {
+    let replies = [];
+    try { replies = await repliesSinceUser(s.cwd, s.claudeSessionId, s.dismissedAt); } catch { return; }
+    if (!s.waitingSince || this.sessions.get(s.id) !== s) return; // the user answered meanwhile
+    for (let k = replies.length - 1; k >= 0; k--) {
+      if (s.asks.length && replies[k].at <= s.asksFrom) return; // what we have is as new
+      const found = findAsks(replies[k].text);
+      if (!found.length) continue;
+      this.setAsks(s, found, { since: s.waitingSince, from: replies[k].at });
       return;
     }
   }
@@ -536,11 +579,16 @@ class SessionManager extends EventEmitter {
    * after the text went in. Line breaks go in as a paste when the terminal takes pastes (an Enter
    * would send the first line alone); otherwise they become spaces.
    */
-  reply(id, text) {
+  reply(id, text, key) {
     const s = this.sessions.get(id);
     let body = String(text || '').replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim();
     if (!s || !body) return { ok: false };
     if (!s.pty || !(IDLE.has(s.status) || s.status === 'busy')) return { ok: false, error: this.t('inbox.notNow') };
+    // With several questions open, say which one this answers: its label ("D5: …") or its topic.
+    const ask = key ? s.asks.find((a) => a.key === key) : null;
+    if (ask && s.asks.length > 1) body = `${askName(ask)}: ${body}`;
+    s.inboxReplies.push({ text: squash(body), key: ask ? ask.key : null });
+    if (s.inboxReplies.length > 10) s.inboxReplies.shift();
     if (body.includes('\n')) body = s.bracketedPaste ? `\x1b[200~${body}\x1b[201~` : body.replace(/\s*\n\s*/g, ' ');
     this.typeNote(s, body);
     return { ok: true };
@@ -976,7 +1024,7 @@ class SessionManager extends EventEmitter {
       rows: s.rows,
       resumeNote: s.resumeNote,
       waitingSince: s.waitingSince,
-      decision: s.decision,
+      asks: s.asks,
       fullReply: s.fullReply,
       dismissedAt: s.dismissedAt,
     }));
@@ -1005,7 +1053,7 @@ class SessionManager extends EventEmitter {
       parked: s.parked, // administrator session restored, waiting for you to start it
       elevated: s.elevated,
       waitingSince: s.waitingSince, // your turn since then (null: you've had the last word)
-      decision: s.decision, // { text, since }: the decision it asked you for
+      asks: s.asks, // what it asked you to decide: [{ key, label, topic, text, since }]
       guard: s.guard.length ? { count: s.guard.length, since: s.guard[0].at } : null, // image-guard windows open
     };
   }
@@ -1041,22 +1089,25 @@ function describeTool(name, input) {
 }
 
 /**
- * What a session asks the user for, from the text of its turn. The rule in the user's global
- * CLAUDE.md has it write, on a line of its own:
+ * What a session asks the user to decide, from the text of a message: one entry per question.
+ * The rule in the user's global CLAUDE.md has it write, on a line of its own,
  *   [project] Necesito tu decisión: <the question>
- * and, when what it waits for changes, a block:
+ * numbering them when there are several (D1, D2…, so the user can answer "D2: yes"), and, when what
+ * it waits for changes, a block:
  *   Pendiente de ti:
  *   - D5: <…>
- *   - D6: <…>
- * The line wins; otherwise the block's items, one per line. Found anywhere in the message, and
- * despite the markup the rule asks not to use (quote marks, bold, inline code, a heading or list
- * bullet). Not inside a code block, and not the rule's own example ("[tu-proyecto]", no question,
- * "Pendiente de ti: nada"), so quoting the rule doesn't count.
+ *   - Bajas de scriptorium: <…>
+ * The block's items, if there is one; else, with the line, the numbered questions in the message
+ * if there are two or more; else the line. Found anywhere in the message, and despite the markup
+ * the rule asks not to use (quote marks, bold, inline code, a heading or list bullet). Not inside a
+ * code block, and not the rule's own example ("[tu-proyecto]", no question, "Pendiente de ti:
+ * nada"), so quoting the rule doesn't count.
  */
 const DECISION_LINE = /^\[([^\]\n]{1,80})\]\s*necesito\s+tu\s+decisi[oó]n\s*:\s*(.+)$/iu;
 const PENDING_HEAD = /^pendiente\s+de\s+ti\s*[:：.]?\s*(.*)$/iu;
 const PENDING_NONE = /^(nada|ningun[oa]?|ningún|sin\s+pendientes)\b|^[-—–]$/iu;
-const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+(.*)$/;
+const LIST_ITEM = /^(\s*)(?:[-*+•]|\d+[.)])\s+(.*)$/;
+const ASK_LABEL = /^([A-Z]{1,2}\d{1,2})\s*[:.)—–-]\s*(?=\S)/u;
 
 /** A line as a session meant it, without the markup around it. */
 function plainLine(raw) {
@@ -1069,21 +1120,45 @@ function plainLine(raw) {
     .trim();
 }
 
-function findDecision(message) {
+/** One question: its label ("D5"), or else its topic (the words before a colon), and its text. */
+function toAsk(text) {
+  const t = String(text).trim().slice(0, 400);
+  const m = ASK_LABEL.exec(t);
+  const label = m ? m[1] : '';
+  const tm = label ? null : /^([^:¿?\n]{2,60}):\s/u.exec(t);
+  const topic = tm ? tm[1].trim() : '';
+  return { key: label || topic || t.slice(0, 80), label, topic, text: t };
+}
+
+function uniqueAsks(list) {
+  const seen = new Set();
+  return list.filter((a) => (seen.has(a.key) ? false : seen.add(a.key)));
+}
+
+/** How an answer from the inbox names the question it answers. */
+function askName(a) {
+  return a.label || a.topic || `«${a.text.length > 50 ? a.text.slice(0, 50) + '…' : a.text}»`;
+}
+
+const squash = (t) => String(t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+function findAsks(message) {
   const lines = [];
   let fenced = false;
   for (const raw of String(message || '').split(/\r?\n/)) {
     if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; lines.push(null); continue; }
     lines.push(fenced ? null : raw); // null: inside a code block, or a fence
   }
+  let question = '';
   for (const raw of lines) {
     if (raw === null) continue;
     const m = DECISION_LINE.exec(plainLine(raw));
     if (!m) continue;
     const project = m[1].trim().toLowerCase();
-    const question = m[2].trim();
-    if (project === 'tu-proyecto' || project === 'proyecto' || !question.replace(/[¿?….\s]/g, '')) continue;
-    return question.slice(0, 500);
+    const q = m[2].trim();
+    if (project === 'tu-proyecto' || project === 'proyecto' || !q.replace(/[¿?….\s]/g, '')) continue;
+    question = q.slice(0, 400);
+    break;
   }
   for (let k = 0; k < lines.length; k++) {
     if (lines[k] === null) continue;
@@ -1096,19 +1171,35 @@ function findDecision(message) {
       if (raw === null) break;
       if (!raw.trim()) { if (items.length) break; continue; } // a blank line may follow the heading
       const li = LIST_ITEM.exec(raw);
-      if (li) items.push(plainLine(li[1]));
+      if (li && li[1].length >= 2 && items.length) items[items.length - 1] += ' — ' + plainLine(li[2]); // a sub-item
+      else if (li) items.push(plainLine(li[2]));
       else if (/^\s{2,}\S/.test(raw) && items.length) items[items.length - 1] += ' ' + plainLine(raw);
       else break;
     }
     const real = items.map((x) => x.trim()).filter((x) => x && !PENDING_NONE.test(x));
-    if (real.length) return real.join('\n').slice(0, 500);
+    if (real.length) return uniqueAsks(real.map(toAsk));
   }
-  return '';
+  if (!question) return [];
+  const numbered = [];
+  for (const raw of lines) {
+    if (raw === null) continue;
+    const line = plainLine(raw);
+    if (ASK_LABEL.test(line)) numbered.push(toAsk(line));
+  }
+  const asks = uniqueAsks(numbered);
+  return asks.length >= 2 ? asks : [toAsk(question)];
 }
 
-function cleanDecision(d) {
-  if (!d || typeof d !== 'object' || typeof d.text !== 'string' || !d.text) return null;
-  return { text: d.text.slice(0, 500), since: Number(d.since) > 0 ? Number(d.since) : Date.now() };
+/** Asks saved by this version, or the one decision an earlier one saved (a block's items, one per line). */
+function cleanAsks(asks, decision) {
+  const when = (n) => (Number(n) > 0 ? Number(n) : Date.now());
+  if (Array.isArray(asks)) {
+    return uniqueAsks(asks.filter((a) => a && typeof a.text === 'string' && a.text).slice(0, 30).map((a) => ({ ...toAsk(a.text), since: when(a.since) })));
+  }
+  if (decision && typeof decision.text === 'string' && decision.text) {
+    return uniqueAsks(decision.text.split('\n').filter((x) => x.trim()).map((x) => ({ ...toAsk(x), since: when(decision.since) })));
+  }
+  return [];
 }
 
 function firstQuestion(input) {
