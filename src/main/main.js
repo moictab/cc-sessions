@@ -4,9 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFile, spawn } = require('child_process');
-const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, screen, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, screen, clipboard, powerMonitor } = require('electron');
 const { Store } = require('./store');
 const { startHookServer } = require('./hook-server');
+const { PhoneAlert } = require('./phone-alert');
 const { SessionManager } = require('./sessions');
 const { Registry } = require('./registry');
 const { resolveClaude } = require('./claude-env');
@@ -39,6 +40,7 @@ if (process.platform === 'win32') app.setToastActivatorCLSID(TOAST_CLSID);
 let win = null;
 let store = null;
 let settings = null;
+let phoneAlert = null;
 let manager = null;
 let registry = null;
 let hooks = null;
@@ -287,6 +289,7 @@ async function shutdown({ relaunch = false } = {}) {
   if (relaunch) app.relaunch();
   win.hide(); // closing takes a moment: wait for the terminals out of sight
   registry.stop();
+  if (phoneAlert) phoneAlert.stop();
   await manager.killAll();
   admin.close(); // the administrator helper exits with it
   startExitWatchdog();
@@ -334,6 +337,7 @@ function registerIpc() {
   }));
   ipcMain.handle('messages:clear', () => messages.clear());
   ipcMain.handle('settings:update', (_e, patch) => settings.update(patch));
+  ipcMain.handle('alerts:test', () => (phoneAlert ? phoneAlert.test() : { ok: false }));
   // Synchronous so the page can put up its text in the right language before it first paints.
   ipcMain.on('settings:language', (e) => { e.returnValue = settings.get().ui.language; });
 
@@ -453,6 +457,8 @@ async function boot() {
   manager.on('reset', (id) => send('pty:reset', id));
   manager.on('persist', () => store.update({ sessions: manager.snapshot() }));
   manager.on('attention', notifyAttention);
+  phoneAlert = new PhoneAlert({ manager, settings, t, idleState: (s) => powerMonitor.getSystemIdleState(s) });
+  phoneAlert.start();
 
   registry = new Registry();
   registry.on('change', (entries) => {

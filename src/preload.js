@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('ccsm', {
   toggleDevtools: () => ipcRenderer.send('ui:devtools'),
   reload: () => ipcRenderer.send('ui:reload'),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
+  testAlert: () => ipcRenderer.invoke('alerts:test'),
 
   pickFolder: () => ipcRenderer.invoke('dialog:folder'),
   listProjects: () => ipcRenderer.invoke('history:projects'),

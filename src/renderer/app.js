@@ -1645,7 +1645,50 @@
     listField.append(el('span', 'set-label', t('settings.listMode')), listSeg);
     const listNote = el('p', 'set-hint set-list-note', t('settings.listModeNote'));
 
-    body.append(fontField, sizeField, preview, uiSection, langField, listField, listNote, animRow);
+    // Phone notice (phone-alert.js in the main process)
+    const alertSection = el('h3', 'set-section set-section-gap', t('settings.alerts'));
+    const alertNote = el('p', 'set-hint set-alert-note', t('settings.alertsNote'));
+    const alerts = ui.settings.alerts || { afterMinutes: null, command: null };
+    const afterField = el('div', 'set-field set-size');
+    const afterLabel = el('label', 'set-label', t('settings.alertsAfter'));
+    const afterInput = el('input', 'size-input');
+    afterInput.type = 'number';
+    afterInput.id = 'set-alert-after';
+    afterInput.min = ui.settingsLimits.alertMinutes ? ui.settingsLimits.alertMinutes.min : 1;
+    afterInput.max = ui.settingsLimits.alertMinutes ? ui.settingsLimits.alertMinutes.max : 1440;
+    afterInput.value = alerts.afterMinutes ? String(alerts.afterMinutes) : '';
+    afterLabel.htmlFor = afterInput.id;
+    afterField.append(afterLabel, afterInput, el('span', 'set-unit', t('settings.alertsMinutes')));
+    afterInput.addEventListener('change', async () => {
+      const n = afterInput.value.trim() ? Number(afterInput.value) : null;
+      const saved = await updateSettings({ alerts: { afterMinutes: n } });
+      afterInput.value = saved.alerts.afterMinutes ? String(saved.alerts.afterMinutes) : '';
+    });
+    const cmdField = el('div', 'set-field');
+    const cmdLabel = el('label', 'set-label', t('settings.alertsCommand'));
+    const cmdInput = el('input', 'set-filter set-command');
+    cmdInput.id = 'set-alert-command';
+    cmdInput.spellcheck = false;
+    cmdInput.placeholder = 'ssh.exe -i %USERPROFILE%\\.ssh\\key user@host';
+    cmdInput.value = alerts.command || '';
+    cmdLabel.htmlFor = cmdInput.id;
+    cmdInput.addEventListener('change', () => updateSettings({ alerts: { command: cmdInput.value } }));
+    const testRow = el('div', 'set-alert-test');
+    const testBtn = el('button', 'btn-secondary', t('settings.alertsTest'));
+    const testResult = el('span', 'set-hint');
+    testBtn.addEventListener('click', async () => {
+      await updateSettings({ alerts: { command: cmdInput.value } });
+      testBtn.disabled = true;
+      testResult.textContent = t('settings.alertsSending');
+      let r = null;
+      try { r = await api.testAlert(); } catch { /* reported below */ }
+      testBtn.disabled = false;
+      testResult.textContent = r && r.ok ? t('settings.alertsSent') : t('settings.alertsFailed', { error: (r && r.error) || '?' });
+    });
+    testRow.append(testBtn, testResult);
+    cmdField.append(cmdLabel, cmdInput, el('span', 'set-hint', t('settings.alertsCommandHint')), testRow);
+
+    body.append(fontField, sizeField, preview, uiSection, langField, listField, listNote, animRow, alertSection, alertNote, afterField, cmdField);
     modal.appendChild(body);
 
     let families = null;
