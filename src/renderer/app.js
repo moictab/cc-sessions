@@ -295,7 +295,9 @@
     const regrouped = e.view.group !== view.group;
     e.view = view;
     if (renamed && ui.msgOpen) renderMessages();
-    if (view.status !== prev && ATTENTION.has(view.status) && !(view.id === ui.activeId && ui.windowAttended)) {
+    // A turn that a note of ours or another session started ends quietly (unless it asks you something).
+    const quiet = view.status === 'done' && view.quietTurn && !(view.asks && view.asks.length);
+    if (view.status !== prev && ATTENTION.has(view.status) && !(view.id === ui.activeId && ui.windowAttended) && !quiet) {
       e.unseen = true;
     }
     if (!ATTENTION.has(view.status)) e.unseen = false;

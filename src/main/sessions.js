@@ -146,6 +146,11 @@ class SessionManager extends EventEmitter {
       asks: cleanAsks(rec.asks, rec.decision), // [{ key, label, topic, text, since }] (see also the end of add())
       asksFrom: 0, // when the message they came from was written (ms; 0: not known)
       inboxReplies: [], // answers typed from the inbox and not seen yet: [{ text, key }] (see userAnswered())
+      userSpokeAt: 0, // when the user last wrote to it
+      // Whose turn this is: started by the user, or by a note of ours or another session's
+      // message. A turn without a prompt at all (one that goes on by itself) counts as the user's.
+      turnByUser: true,
+      quietTurn: false, // the last turn wasn't the user's: it ends without asking for attention
       // When the user last took it off the inbox: what it asked before that doesn't come back.
       dismissedAt: Number(rec.dismissedAt) > 0 ? Number(rec.dismissedAt) : 0,
       bracketedPaste: false, // the terminal asked for pastes to be marked (ESC[?2004h)
@@ -410,6 +415,10 @@ class SessionManager extends EventEmitter {
       }
       case 'UserPromptSubmit': {
         const envelopes = parseEnvelopes(p.prompt);
+        const byUser = !envelopes.length && typeof p.prompt === 'string' && !p.prompt.startsWith(APP_NOTE);
+        // Any prompt of the user's in a turn makes it theirs; the others only start one.
+        if (byUser) s.turnByUser = true;
+        else if (s.status !== 'busy') s.turnByUser = false;
         if (envelopes.length) {
           // Turn started by another session's message, not by the user.
           const e = envelopes[envelopes.length - 1];
@@ -449,6 +458,11 @@ class SessionManager extends EventEmitter {
         break;
       }
       case 'Stop': {
+        // A turn started by a note of ours or by another session ends quietly: nothing new for the
+        // user, unless it asks them something (that goes to the inbox all the same).
+        const quiet = !s.turnByUser;
+        s.quietTurn = quiet;
+        s.turnByUser = true;
         let found = [];
         if (typeof p.last_assistant_message === 'string') {
           s.lastReply = p.last_assistant_message.slice(0, 2000);
@@ -461,7 +475,7 @@ class SessionManager extends EventEmitter {
         // asked earlier in the turn and gone on with something else, as the rule says to: its
         // other messages are in the transcript.
         else setTimeout(() => this.recoverAsks(s), 1000);
-        if (!s.waitingSince) s.waitingSince = Date.now();
+        if (!s.waitingSince && !quiet) s.waitingSince = Date.now();
         // Before setStatus: for a request still queued, the end of this turn is when it gets typed.
         if (s.wind && s.wind.state === 'delivered') this.windAnswered(s);
         this.setStatus(s, 'done');
@@ -502,6 +516,7 @@ class SessionManager extends EventEmitter {
     const before = new Map(s.asks.map((a) => [a.key, a]));
     s.asks = found.map((a) => ({ ...a, since: before.has(a.key) ? before.get(a.key).since : since }));
     s.asksFrom = from;
+    if (!s.waitingSince) s.waitingSince = since; // asking makes it the user's turn, quiet or not
     this.emit('update', this.view(s));
     this.emit('persist');
   }
@@ -512,6 +527,7 @@ class SessionManager extends EventEmitter {
    * (if something is still open, the session lists it again, as the rule says to).
    */
   userAnswered(s, prompt) {
+    s.userSpokeAt = Date.now();
     const said = squash(prompt);
     const ours = s.inboxReplies.filter((r) => said.includes(r.text));
     s.inboxReplies = s.inboxReplies.filter((r) => !ours.includes(r));
@@ -559,14 +575,15 @@ class SessionManager extends EventEmitter {
    * Never replaces what came from a newer message.
    */
   async recoverAsks(s) {
+    const spoke = s.userSpokeAt;
     let replies = [];
     try { replies = await repliesSinceUser(s.cwd, s.claudeSessionId, s.dismissedAt); } catch { return; }
-    if (!s.waitingSince || this.sessions.get(s.id) !== s) return; // the user answered meanwhile
+    if (s.userSpokeAt !== spoke || this.sessions.get(s.id) !== s) return; // the user wrote meanwhile
     for (let k = replies.length - 1; k >= 0; k--) {
       if (s.asks.length && replies[k].at <= s.asksFrom) return; // what we have is as new
       const found = findAsks(replies[k].text);
       if (!found.length) continue;
-      this.setAsks(s, found, { since: s.waitingSince, from: replies[k].at });
+      this.setAsks(s, found, { since: s.waitingSince || Date.now(), from: replies[k].at });
       return;
     }
   }
@@ -674,7 +691,8 @@ class SessionManager extends EventEmitter {
     s.detail = detail;
     s.statusSince = Date.now();
     this.emit('update', this.view(s));
-    if (ATTENTION.has(status) && prev !== status && (status !== 'done' || prev === 'busy')) {
+    const quietEnd = status === 'done' && s.quietTurn && !s.asks.length;
+    if (ATTENTION.has(status) && prev !== status && (status !== 'done' || prev === 'busy') && !quietEnd) {
       this.emit('attention', this.view(s));
     }
     if (s.wind) this.windStep(s);
@@ -1054,6 +1072,7 @@ class SessionManager extends EventEmitter {
       elevated: s.elevated,
       waitingSince: s.waitingSince, // your turn since then (null: you've had the last word)
       asks: s.asks, // what it asked you to decide: [{ key, label, topic, text, since }]
+      quietTurn: s.quietTurn, // its last turn wasn't yours: finished without asking for attention
       guard: s.guard.length ? { count: s.guard.length, since: s.guard[0].at } : null, // image-guard windows open
     };
   }
