@@ -99,7 +99,8 @@
       'session.asking': 'Is asking you a question',
       'session.plan': 'Has a plan ready for review',
       'session.waiting': 'Waiting for your answer',
-      'inbox.notIdle': 'It’s working right now: answer once it finishes.',
+      'inbox.notNow': 'It can’t take an answer right now: it’s starting, or waiting on something in the session.',
+      'inbox.queued': 'It’s working: your answer waits in its queue and it reads it as soon as it can.',
       // ---- inbox
       'inbox.heading': 'Waiting for you',
       'inbox.buttonTitle': 'Waiting for you (Ctrl+Shift+I)',
@@ -457,7 +458,8 @@
       'session.asking': 'Te está haciendo una pregunta',
       'session.plan': 'Tiene un plan listo para revisar',
       'session.waiting': 'Espera tu respuesta',
-      'inbox.notIdle': 'Ahora mismo está trabajando: contesta cuando termine.',
+      'inbox.notNow': 'Ahora no puede recibir una respuesta: está arrancando o esperando algo en la sesión.',
+      'inbox.queued': 'Está trabajando: tu respuesta espera en su cola y la leerá en cuanto pueda.',
       // ---- bandeja
       'inbox.heading': 'Esperando tu respuesta',
       'inbox.buttonTitle': 'Esperando tu respuesta (Ctrl+Shift+I)',

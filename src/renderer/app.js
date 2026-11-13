@@ -2214,12 +2214,14 @@
     if (c.text.textContent !== text) c.text.textContent = text;
     if (c.context && c.context.open) fillContext(c);
     if (c.ta) {
-      const idle = v.status === 'done' || v.status === 'ready';
-      c.ta.disabled = !idle;
-      c.send.disabled = !idle;
-      if (!idle) setInboxNote(c, t('inbox.notIdle'));
-      else if (c.noteIsBusy) setInboxNote(c, t('inbox.hint'));
-      c.noteIsBusy = !idle;
+      // While it works your answer waits in its queue; while it starts it would get lost.
+      const busy = v.status === 'busy';
+      const can = busy || v.status === 'done' || v.status === 'ready';
+      c.ta.disabled = !can;
+      c.send.disabled = !can;
+      const note = !can ? 'inbox.notNow' : busy ? 'inbox.queued' : 'inbox.hint';
+      if (c.noteKey !== note) setInboxNote(c, t(note)); // "Sent." stays until the state changes
+      c.noteKey = note;
     }
   }
 

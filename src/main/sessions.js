@@ -493,16 +493,18 @@ class SessionManager extends EventEmitter {
   }
 
   /**
-   * The user's answer from the inbox, typed into the session as a prompt. Only between turns:
-   * typed into a permission prompt or a question, it would answer that instead. Line breaks go
-   * in as a paste when the terminal takes pastes (an Enter would send the first line alone);
-   * otherwise they become spaces.
+   * The user's answer from the inbox, typed into the session as a prompt. Between turns, or while
+   * it works: Claude takes it into its queue and reads it as soon as it can, as when you type in
+   * its terminal. Not with a permission prompt or a question open (typed into those, it would
+   * answer them instead), nor while it starts. typeNote() doesn't press Enter if that changes
+   * after the text went in. Line breaks go in as a paste when the terminal takes pastes (an Enter
+   * would send the first line alone); otherwise they become spaces.
    */
   reply(id, text) {
     const s = this.sessions.get(id);
     let body = String(text || '').replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim();
     if (!s || !body) return { ok: false };
-    if (!s.pty || !IDLE.has(s.status)) return { ok: false, error: this.t('inbox.notIdle') };
+    if (!s.pty || !(IDLE.has(s.status) || s.status === 'busy')) return { ok: false, error: this.t('inbox.notNow') };
     if (body.includes('\n')) body = s.bracketedPaste ? `\x1b[200~${body}\x1b[201~` : body.replace(/\s*\n\s*/g, ' ');
     this.typeNote(s, body);
     return { ok: true };
