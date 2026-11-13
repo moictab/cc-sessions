@@ -200,14 +200,16 @@ kbd {
 .ext-list .ext-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .ext-list .ext-path { grid-column: 2; font: 11px var(--mono); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.sb-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.sb-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 10px 10px 10px 12px; border-top: 1px solid var(--line); }
 .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: var(--radius); overflow: hidden; }
-.seg button { padding: 3px 10px; color: var(--muted); font-size: 12px; }
+.seg button { padding: 3px 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .seg button + button { border-left: 1px solid var(--line-2); }
 .seg button.on { background: var(--panel-3); color: var(--text); }
 .link-btn { color: var(--muted); font-size: 12px; }
 .link-btn:hover { color: var(--text); }
-.foot-actions { display: flex; gap: 2px; }
+/* Five icons and the view switch share 284px: the switch keeps its words whole ("Cuadrícula"). */
+.sb-foot .seg { flex: none; }
+.foot-actions { display: flex; gap: 0; min-width: 0; }
 .foot-btn { position: relative; display: grid; place-items: center; width: 28px; height: 26px; border-radius: var(--radius); color: var(--muted); }
 .foot-btn svg { width: 16px; height: 16px; }
 .foot-btn:hover, .foot-btn[aria-pressed="true"] { background: var(--panel-3); color: var(--text); }
