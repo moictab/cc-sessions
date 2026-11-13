@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('ccsm', {
   setSessionMeta: (id, patch) => ipcRenderer.invoke('session:set-meta', id, patch),
   saveGroups: (groups) => ipcRenderer.send('ui:groups', groups),
   clearInterrupted: (id) => ipcRenderer.invoke('session:clear-interrupted', id),
+  replyTo: (id, text) => ipcRenderer.invoke('inbox:reply', id, text),
+  dismissWaiting: (id) => ipcRenderer.invoke('inbox:dismiss', id),
   write: (id, data) => ipcRenderer.send('pty:write', id, data),
   resize: (id, cols, rows) => ipcRenderer.send('pty:resize', id, cols, rows),
 

@@ -145,9 +145,20 @@
     return v.interrupted && (v.status === 'ready' || v.status === 'starting' || v.status === 'done');
   }
 
+  /** Between turns with a decision asked of you (see findDecision() in sessions.js). */
+  function decisionPending(v) {
+    return !!v.decision && (v.status === 'done' || v.status === 'ready');
+  }
+
+  /** The status the dot and the label are drawn with: a pending decision looks like a question. */
+  function shown(v) {
+    return decisionPending(v) ? 'input' : v.status;
+  }
+
   function describe(v) {
     if (v.parked) return { label: t('status.notStarted'), text: t('admin.needsApproval') };
     if (isInterrupted(v)) return { label: t('status.interrupted'), text: t('status.interruptedText') };
+    if (decisionPending(v)) return { label: t('status.decision'), text: oneLine(v.decision.text) };
     switch (v.status) {
       case 'busy': return { label: t('status.busy'), text: v.lastPrompt ? t('common.quote', { text: oneLine(v.lastPrompt, 120) }) : '' };
       case 'permission': return { label: t('status.permission'), text: permissionText(v.detail) };
@@ -394,7 +405,7 @@
     const v = e.view;
     const interrupted = isInterrupted(v);
 
-    e.item.dataset.status = v.status;
+    e.item.dataset.status = shown(v);
     e.item.classList.toggle('unseen', e.unseen);
     e.item.classList.toggle('interrupted', interrupted);
     e.pane.classList.toggle('interrupted', interrupted);
@@ -410,8 +421,8 @@
     path.hidden = sameName(v.name, v.cwd);
     $('.sess-detail', e.item).replaceChildren(stateLine(v));
 
-    e.pane.dataset.status = v.status;
-    $('.pane-head .dot', e.pane).dataset.status = v.status;
+    e.pane.dataset.status = shown(v);
+    $('.pane-head .dot', e.pane).dataset.status = shown(v);
     $('.pane-name', e.pane).textContent = v.name;
     $('.pane-state', e.pane).replaceChildren(stateLine(v));
 
@@ -432,14 +443,14 @@
     dom.topbar.hidden = !e;
     if (!e) return;
     const v = e.view;
-    dom.tbDot.dataset.status = v.status;
+    dom.tbDot.dataset.status = shown(v);
     dom.tbDot.classList.toggle('interrupted', isInterrupted(v));
     setBadge(dom.tbMono, v);
     dom.tbAdmin.hidden = !v.admin;
     if (!dom.tbName.querySelector('input')) dom.tbName.textContent = v.name;
     dom.tbPath.textContent = shortPath(v.cwd);
     dom.tbPath.title = t('topbar.openPath', { path: v.cwd });
-    dom.tbStatus.dataset.status = v.status;
+    dom.tbStatus.dataset.status = shown(v);
     dom.tbStatus.replaceChildren(stateLine(v, { long: true }));
   }
 
@@ -470,7 +481,7 @@
   function updateAttention() {
     let n = 0;
     for (const e of ui.sessions.values()) {
-      if (e.view.status === 'permission' || e.view.status === 'input' || e.unseen) n++;
+      if (e.view.status === 'permission' || e.view.status === 'input' || e.unseen || decisionPending(e.view)) n++;
     }
     dom.attn.hidden = n === 0;
     dom.attn.textContent = String(n);
@@ -543,7 +554,7 @@
 
   function needsYou(e) {
     const s = e.view.status;
-    return s === 'permission' || s === 'input' || (s === 'done' && e.unseen) || ui.stickyId === e.id;
+    return s === 'permission' || s === 'input' || (s === 'done' && e.unseen) || decisionPending(e.view) || ui.stickyId === e.id;
   }
 
   /** What the list shows: [{ key, title, ids, collapsible, collapsed, group }]. A null title: no header. */
@@ -619,7 +630,7 @@
     // Folded: one small dot per session, so you still see what they're doing.
     $('.lh-dots', h).replaceChildren(...(sec.collapsed ? sec.ids.map((id) => {
       const d = el('span', 'mini-dot');
-      d.dataset.status = ui.sessions.get(id).view.status;
+      d.dataset.status = shown(ui.sessions.get(id).view);
       return d;
     }) : []));
     return h;
@@ -898,10 +909,10 @@
     const row = (e, i) => {
       const li = el('li', 'switcher-row' + (e.id === ui.activeId ? ' current' : ''));
       const dot = el('span', 'dot');
-      dot.dataset.status = e.view.status;
+      dot.dataset.status = shown(e.view);
       const groupName = ui.groups.find((g) => g.id === groupOf(e.id))?.name;
       const state = el('span', 'sw-state');
-      state.dataset.status = e.view.status;
+      state.dataset.status = shown(e.view);
       state.appendChild(el('b', null, describe(e.view).label));
       li.append(dot, badge(e.view), el('span', 'sw-name', e.view.name), el('span', 'sw-meta', [groupName, shortPath(e.view.cwd)].filter(Boolean).join(' · ')), state);
       li.addEventListener('mousemove', () => { if (sel !== i) { sel = i; mark(); } });

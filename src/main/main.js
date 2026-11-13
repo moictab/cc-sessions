@@ -96,6 +96,11 @@ const ATTENTION_KEY = {
   done: 'notify.done',
 };
 
+function attentionKey(view) {
+  if (view.status === 'done' && view.decision) return 'notify.decision';
+  return ATTENTION_KEY[view.status] || '';
+}
+
 // isFocused() alone stays true for a minimized window on Windows.
 function windowAttended() {
   return !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized() && win.isFocused();
@@ -105,9 +110,10 @@ function notifyAttention(view) {
   if (!win || win.isDestroyed() || windowAttended()) return; // the sidebar already shows it
   win.flashFrame(true);
   if (!Notification.isSupported()) return;
-  const body = view.detail || (view.status === 'done' && view.lastReply) || view.cwd;
+  const decision = view.status === 'done' && view.decision;
+  const body = (decision && decision.text) || view.detail || (view.status === 'done' && view.lastReply) || view.cwd;
   const n = new Notification({
-    title: `${view.name} · ${ATTENTION_KEY[view.status] ? t(ATTENTION_KEY[view.status]) : view.status}`,
+    title: `${view.name} · ${t(attentionKey(view)) || view.status}`,
     body: String(body).replace(/\s+/g, ' ').slice(0, 180),
     icon: ICON_PNG,
   });
@@ -343,6 +349,9 @@ function registerIpc() {
   ipcMain.handle('session:close', (_e, id) => manager.remove(id));
   ipcMain.handle('session:rename', (_e, id, name) => manager.rename(id, name));
   ipcMain.handle('session:clear-interrupted', (_e, id) => manager.clearInterrupted(id));
+  // The inbox: the user's answer to a session waiting for them, or taking it off the list.
+  ipcMain.handle('inbox:reply', (_e, id, text) => manager.reply(id, text));
+  ipcMain.handle('inbox:dismiss', (_e, id) => manager.dismissWaiting(id));
   ipcMain.on('pty:write', (_e, id, data) => manager.write(id, data));
   ipcMain.on('pty:resize', (_e, id, cols, rows) => manager.resize(id, cols, rows));
 

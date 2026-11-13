@@ -33,6 +33,8 @@ const MAX_BUFFER = 512 * 1024;
 const termSize = (n, min, max, fallback) => (Number.isInteger(n) && n >= min && n <= max ? n : fallback);
 // A session may ask for a restart itself (to load a plugin); this keeps a confused one from looping.
 const SELF_RESTARTS_PER_HOUR = 6;
+// Every note the app types into a session starts like this: a prompt that does is not the user's.
+const APP_NOTE = '[CC Sessions]';
 
 class SessionManager extends EventEmitter {
   /** `t(key, vars)` translates into the interface language of the moment (see shared/i18n.js). */
@@ -129,6 +131,13 @@ class SessionManager extends EventEmitter {
       // restarting the app is delivered by the next run).
       resumeNote: typeof rec.resumeNote === 'string' ? rec.resumeNote.slice(0, 4000) : '',
       wind: null, // { kind: 'stop' | 'cancel', state, text, timer }: see windDownAll()
+      // Waiting for the user (kept between runs): since when it's been their turn, that is, since
+      // the first turn that ended after their last prompt, and the decision the session asked them
+      // for, if it did (see findDecision()). Notes of ours and other sessions' messages also start
+      // turns, but only the user's own prompt answers.
+      waitingSince: Number(rec.waitingSince) > 0 ? Number(rec.waitingSince) : null,
+      decision: cleanDecision(rec.decision), // { text, since } | null
+      bracketedPaste: false, // the terminal asked for pastes to be marked (ESC[?2004h)
       idleTimer: null,
       noteTimer: null,
       selfRestarts: [],
@@ -294,6 +303,12 @@ class SessionManager extends EventEmitter {
   // ---- terminal I/O ----------------------------------------------------------------
 
   onData(s, data) {
+    // Whether a multi-line answer can go in as a paste (see reply()). The sequence is short and
+    // Claude sends it whole, so a chunk boundary in the middle of it is unlikely enough.
+    if (data.includes('\x1b[?2004')) {
+      const on = data.lastIndexOf('\x1b[?2004h');
+      s.bracketedPaste = on >= 0 && on > data.lastIndexOf('\x1b[?2004l');
+    }
     s.buffer += data;
     if (s.buffer.length > MAX_BUFFER) s.buffer = s.buffer.slice(-MAX_BUFFER);
     s.pending += data;
@@ -362,6 +377,8 @@ class SessionManager extends EventEmitter {
     switch (p.hook_event_name) {
       case 'SessionStart': {
         if (p.source === 'startup' || p.source === 'resume') this.resendSizeIfChanged(s);
+        // A new conversation (or /clear): whatever it was waiting for belonged to the old one.
+        if (p.source === 'startup' || p.source === 'clear') this.clearWaiting(s);
         // Auto-compaction restarts the session mid-turn; keep whatever we had.
         if (p.source !== 'compact') this.setStatus(s, 'ready');
         // On every start, resume, /clear and compaction, so it's never forgotten.
@@ -377,6 +394,7 @@ class SessionManager extends EventEmitter {
           s.lastPrompt = this.t('session.messageFrom', { name: e.fromName || this.t('session.anotherSession'), body: e.body }).slice(0, 2000);
         } else if (typeof p.prompt === 'string') {
           s.lastPrompt = p.prompt.slice(0, 2000);
+          if (!p.prompt.startsWith(APP_NOTE)) this.clearWaiting(s); // the user has answered
         }
         if (s.interrupted) { s.interrupted = false; this.emit('persist'); }
         this.setStatus(s, 'busy');
@@ -408,7 +426,14 @@ class SessionManager extends EventEmitter {
         break;
       }
       case 'Stop':
-        if (typeof p.last_assistant_message === 'string') s.lastReply = p.last_assistant_message.slice(0, 2000);
+        if (typeof p.last_assistant_message === 'string') {
+          s.lastReply = p.last_assistant_message.slice(0, 2000);
+          const asked = findDecision(p.last_assistant_message);
+          if (asked && (!s.decision || s.decision.text !== asked)) s.decision = { text: asked, since: Date.now() };
+        }
+        // A turn without that line keeps the decision: it may have been answering another
+        // session's message, and the user still hasn't said anything.
+        if (!s.waitingSince) s.waitingSince = Date.now();
         // Before setStatus: for a request still queued, the end of this turn is when it gets typed.
         if (s.wind && s.wind.state === 'delivered') this.windAnswered(s);
         this.setStatus(s, 'done');
@@ -430,6 +455,38 @@ class SessionManager extends EventEmitter {
       return adminContext({ dropped: true });
     }
     return '';
+  }
+
+  // ---- waiting for the user ------------------------------------------------------------
+
+  clearWaiting(s) {
+    if (!s.waitingSince && !s.decision) return;
+    s.waitingSince = null;
+    s.decision = null;
+    this.emit('update', this.view(s));
+    this.emit('persist');
+  }
+
+  /** The user takes it off the inbox without answering (dealt with elsewhere, or stale). */
+  dismissWaiting(id) {
+    const s = this.sessions.get(id);
+    if (s) this.clearWaiting(s);
+  }
+
+  /**
+   * The user's answer from the inbox, typed into the session as a prompt. Only between turns:
+   * typed into a permission prompt or a question, it would answer that instead. Line breaks go
+   * in as a paste when the terminal takes pastes (an Enter would send the first line alone);
+   * otherwise they become spaces.
+   */
+  reply(id, text) {
+    const s = this.sessions.get(id);
+    let body = String(text || '').replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim();
+    if (!s || !body) return { ok: false };
+    if (!s.pty || !IDLE.has(s.status)) return { ok: false, error: this.t('inbox.notIdle') };
+    if (body.includes('\n')) body = s.bracketedPaste ? `\x1b[200~${body}\x1b[201~` : body.replace(/\s*\n\s*/g, ' ');
+    this.typeNote(s, body);
+    return { ok: true };
   }
 
   /** Cross-check with ~/.claude/sessions: fixes missed hooks and tracks /clear. */
@@ -815,6 +872,8 @@ class SessionManager extends EventEmitter {
       cols: s.cols,
       rows: s.rows,
       resumeNote: s.resumeNote,
+      waitingSince: s.waitingSince,
+      decision: s.decision,
     }));
   }
 
@@ -840,6 +899,8 @@ class SessionManager extends EventEmitter {
       wind: s.wind && s.wind.kind === 'stop' ? s.wind.state : null, // winding down before a restart
       parked: s.parked, // administrator session restored, waiting for you to start it
       elevated: s.elevated,
+      waitingSince: s.waitingSince, // your turn since then (null: you've had the last word)
+      decision: s.decision, // { text, since }: the decision it asked you for
     };
   }
 }
@@ -871,6 +932,42 @@ function describeTool(name, input) {
     text = `MCP ${server}: ${tool.join('__')}`;
   }
   return text.replace(/\s+/g, ' ').slice(0, 240);
+}
+
+/**
+ * The decision a session asks the user for, from the text of its turn. The rule in the user's
+ * global CLAUDE.md has it write, on a line of its own:
+ *   [project] Necesito tu decisión: <the question>
+ * Found anywhere in the message, and despite the markup the rule asks not to use (quote marks,
+ * bold, inline code, a list bullet). Not inside a code block, and not the rule's own example
+ * ("[tu-proyecto]", or no question), so quoting the rule doesn't count.
+ */
+const DECISION_LINE = /^\[([^\]\n]{1,80})\]\s*necesito\s+tu\s+decisi[oó]n\s*:\s*(.+)$/iu;
+
+function findDecision(message) {
+  let fenced = false;
+  for (const raw of String(message || '').split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; continue; }
+    if (fenced) continue;
+    const line = raw
+      .replace(/[*`]/g, '')
+      .replace(/^\s*(?:>\s*)+/, '')
+      .replace(/^\s*(?:[-+•]|\d+[.)])\s+/, '')
+      .replace(/^\s*_+|_+\s*$/g, '')
+      .trim();
+    const m = DECISION_LINE.exec(line);
+    if (!m) continue;
+    const project = m[1].trim().toLowerCase();
+    const question = m[2].trim();
+    if (project === 'tu-proyecto' || project === 'proyecto' || !question.replace(/[¿?….\s]/g, '')) continue;
+    return question.slice(0, 500);
+  }
+  return '';
+}
+
+function cleanDecision(d) {
+  if (!d || typeof d !== 'object' || typeof d.text !== 'string' || !d.text) return null;
+  return { text: d.text.slice(0, 500), since: Number(d.since) > 0 ? Number(d.since) : Date.now() };
 }
 
 function firstQuestion(input) {
