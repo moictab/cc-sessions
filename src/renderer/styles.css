@@ -60,6 +60,7 @@ kbd {
   border: 1px solid var(--line-2); border-radius: var(--radius); color: var(--text); background: var(--panel-2);
 }
 .btn-new:hover { background: var(--panel-3); }
+.head-actions { display: flex; align-items: center; gap: 4px; }
 
 .session-list { list-style: none; margin: 0; padding: 4px 6px; overflow-y: auto; flex: 1; min-height: 0; }
 .sess {
@@ -249,6 +250,53 @@ kbd {
 .mp-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; min-height: 0; }
 .mp-empty { padding: 24px 18px; color: var(--dim); font-size: 12px; line-height: 1.5; }
 .mp-empty[hidden] { display: none; }
+/* ---------- Inbox: what's waiting for you ---------- */
+.inbox-panel { width: 400px; }
+.attn-count:not([hidden]) { cursor: pointer; }
+.ib-sub { margin: 4px 0 0; color: var(--dim); font-size: 11.5px; line-height: 1.4; }
+.ib-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+.ib-list { list-style: none; margin: 0; padding: 0; }
+.ib-list[hidden] { display: none; }
+.ib-card { padding: 10px 10px 10px 12px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel-2); }
+.ib-card + .ib-card { margin-top: 6px; }
+.ib-card[data-status="permission"] { border-color: color-mix(in srgb, var(--st-permission) 35%, var(--line)); }
+.ib-card[data-status="input"] { border-color: color-mix(in srgb, var(--st-input) 35%, var(--line)); }
+.ib-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.ib-name { min-width: 0; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ib-name:hover { text-decoration: underline; }
+.ib-time { margin-left: auto; flex: none; color: var(--dim); font-size: 11px; white-space: nowrap; }
+.ib-label { margin-top: 6px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.ib-card[data-status="permission"] .ib-label { color: var(--st-permission); }
+.ib-card[data-status="input"] .ib-label { color: var(--st-input); }
+.ib-card[data-status="done"] .ib-label { color: var(--st-done); }
+.ib-text { margin-top: 3px; font-size: 12.5px; line-height: 1.45; color: var(--text); white-space: pre-wrap; word-break: break-word; user-select: text; }
+.ib-card[data-kind="done"] .ib-text {
+  color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ib-context { margin-top: 6px; }
+.ib-context summary { cursor: pointer; color: var(--muted); font-size: 11.5px; width: max-content; }
+.ib-context summary:hover { color: var(--text); }
+.ib-ctx { margin-top: 6px; max-height: 240px; overflow-y: auto; font-size: 12px; line-height: 1.45; }
+.ib-ctx-who { display: block; margin-top: 6px; color: var(--dim); font-size: 11px; font-weight: 600; }
+.ib-ctx-who:first-child { margin-top: 0; }
+.ib-ctx-text { color: var(--muted); white-space: pre-wrap; word-break: break-word; user-select: text; }
+.ib-answer { margin-top: 8px; }
+.ib-answer textarea {
+  display: block; width: 100%; min-height: 56px; max-height: 200px; resize: vertical; padding: 6px 8px;
+  font: 12.5px/1.4 var(--ui-font); color: var(--text); background: var(--bg);
+  border: 1px solid var(--line-2); border-radius: var(--radius);
+}
+.ib-answer textarea:focus { outline: none; border-color: var(--accent); }
+.ib-answer textarea:disabled { opacity: .5; }
+.ib-note { margin-top: 4px; font-size: 11px; color: var(--dim); }
+.ib-note.err { color: #f0717a; }
+.ib-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.ib-actions .btn-primary, .ib-actions .btn-secondary { height: 24px; padding: 0 10px; font-size: 11.5px; }
+.ib-actions .ib-send { margin-left: auto; }
+.ib-done { margin-top: 10px; }
+.ib-done[hidden] { display: none; }
+.ib-done .ib-list { margin-top: 4px; }
+
 .msg { padding: 10px 10px 10px 12px; border-radius: var(--radius); border: 1px solid transparent; }
 .msg + .msg { margin-top: 4px; }
 .msg:hover { background: var(--panel-2); }
@@ -586,13 +634,13 @@ span.peer { color: var(--muted); font-weight: 500; }
 
 /* Thin dark scrollbars for the lists (the terminal has its own, above). */
 .session-list::-webkit-scrollbar, .font-list::-webkit-scrollbar, .switcher-list::-webkit-scrollbar,
-.proj-list::-webkit-scrollbar, .conv-list::-webkit-scrollbar, .mp-list::-webkit-scrollbar { width: 8px; }
+.proj-list::-webkit-scrollbar, .conv-list::-webkit-scrollbar, .mp-list::-webkit-scrollbar, .ib-scroll::-webkit-scrollbar { width: 8px; }
 .session-list::-webkit-scrollbar-thumb, .font-list::-webkit-scrollbar-thumb, .switcher-list::-webkit-scrollbar-thumb,
-.proj-list::-webkit-scrollbar-thumb, .conv-list::-webkit-scrollbar-thumb, .mp-list::-webkit-scrollbar-thumb {
+.proj-list::-webkit-scrollbar-thumb, .conv-list::-webkit-scrollbar-thumb, .mp-list::-webkit-scrollbar-thumb, .ib-scroll::-webkit-scrollbar-thumb {
   background: var(--line-2); border-radius: 4px;
 }
 .session-list::-webkit-scrollbar-track, .font-list::-webkit-scrollbar-track, .switcher-list::-webkit-scrollbar-track,
-.proj-list::-webkit-scrollbar-track, .conv-list::-webkit-scrollbar-track, .mp-list::-webkit-scrollbar-track { background: transparent; }
+.proj-list::-webkit-scrollbar-track, .conv-list::-webkit-scrollbar-track, .mp-list::-webkit-scrollbar-track, .ib-scroll::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- Administrator sessions ---------- */
 :root { --admin: #f0717a; }

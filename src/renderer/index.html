@@ -15,12 +15,17 @@
         <div class="brand">
           <img class="brand-mark" src="../../assets/mark.svg" alt="" width="20" height="20">
           <span>CC Sessions</span>
-          <span id="attn-count" class="attn-count" hidden></span>
+          <span id="attn-count" class="attn-count" hidden title="Waiting for you (Ctrl+Shift+I)" data-i18n-title="inbox.buttonTitle"></span>
         </div>
-        <button id="btn-new" class="btn-new" title="New session (Ctrl+Shift+N)" data-i18n-title="sidebar.newTitle">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
-          <span data-i18n="sidebar.new">New</span>
-        </button>
+        <div class="head-actions">
+          <button id="btn-inbox" class="foot-btn" title="Waiting for you (Ctrl+Shift+I)" data-i18n-title="inbox.buttonTitle" aria-pressed="false">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 9.5 4.2 3.5h7.6l1.7 6v3h-11zM2.5 9.5h3.2l.8 1.5h3l.8-1.5h3.2" /></svg>
+          </button>
+          <button id="btn-new" class="btn-new" title="New session (Ctrl+Shift+N)" data-i18n-title="sidebar.newTitle">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+            <span data-i18n="sidebar.new">New</span>
+          </button>
+        </div>
       </header>
 
       <ol id="session-list" class="session-list"></ol>
@@ -88,6 +93,29 @@
 
       <div class="workspace">
         <div id="stage" class="stage single"></div>
+
+        <aside id="inbox-panel" class="msg-panel inbox-panel" hidden aria-label="Waiting for you" data-i18n-aria-label="inbox.heading">
+          <header class="mp-head">
+            <div class="mp-title-row">
+              <h2 data-i18n="inbox.heading">Waiting for you</h2>
+              <button id="ib-close" class="icon-btn" title="Close (Ctrl+Shift+I)" data-i18n-title="inbox.closeTitle">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+              </button>
+            </div>
+            <p class="ib-sub" data-i18n="inbox.sub">Oldest first.</p>
+          </header>
+          <div class="ib-scroll">
+            <ol id="ib-list" class="ib-list"></ol>
+            <div id="ib-empty" class="mp-empty" hidden></div>
+            <section id="ib-done" class="ib-done" hidden>
+              <button id="ib-done-toggle" class="ext-toggle" aria-expanded="false">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4" /></svg>
+                <span data-i18n="inbox.done">Finished turns</span> <span id="ib-done-count" class="ext-count"></span>
+              </button>
+              <ol id="ib-done-list" class="ib-list" hidden></ol>
+            </section>
+          </div>
+        </aside>
 
         <aside id="msg-panel" class="msg-panel" hidden aria-label="Messages between sessions" data-i18n-aria-label="messages.heading">
           <header class="mp-head">

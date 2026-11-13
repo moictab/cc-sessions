@@ -65,6 +65,8 @@
     msgUnread: 0,
     msgFresh: new Set(),
     msgExpanded: new Set(),
+    inboxOpen: readPref('inboxOpen', false),
+    inboxCards: new Map(), // session id -> its card in the inbox (kept, so a half-written answer survives updates)
   };
 
   const dom = {
@@ -90,6 +92,14 @@
     msgEmpty: $('#mp-empty'),
     msgBtn: $('#btn-messages'),
     msgUnread: $('#msg-unread'),
+    inboxPanel: $('#inbox-panel'),
+    inboxBtn: $('#btn-inbox'),
+    ibList: $('#ib-list'),
+    ibEmpty: $('#ib-empty'),
+    ibDone: $('#ib-done'),
+    ibDoneToggle: $('#ib-done-toggle'),
+    ibDoneList: $('#ib-done-list'),
+    ibDoneCount: $('#ib-done-count'),
   };
 
   translatePage();
@@ -288,6 +298,7 @@
     if (regrouped) syncPanes();
     updateAttention();
     updateWind();
+    renderInbox();
     return e;
   }
 
@@ -310,6 +321,8 @@
     renderSidebar();
     layout();
     updateAttention();
+    ui.inboxCards.delete(id);
+    renderInbox();
   }
 
   function buildItem(id) {
@@ -1153,7 +1166,10 @@
 
   /** Next session that needs you: permission > question > finished, starting after the current one. */
   function jumpToAttention() {
-    const rank = (e) => (e.view.status === 'permission' ? 0 : e.view.status === 'input' ? 1 : e.unseen || e.view.status === 'done' ? 2 : 9);
+    const rank = (e) => {
+      const st = shown(e.view); // an image-guard window counts as a permission, a decision as a question
+      return st === 'permission' ? 0 : st === 'input' ? 1 : e.unseen || st === 'done' ? 2 : 9;
+    };
     const order = stableOrder();
     const start = Math.max(0, order.indexOf(ui.activeId));
     const rotated = [...order.slice(start + 1), ...order.slice(0, start + 1)].map((id) => ui.sessions.get(id));
@@ -1179,6 +1195,7 @@
     else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'j') jumpToAttention();
     else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'w') { if (ui.activeId) confirmClose(ui.activeId); }
     else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'm') setMessagesOpen(!ui.msgOpen);
+    else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'i') setInboxOpen(!ui.inboxOpen);
     else if (ev.ctrlKey && ev.shiftKey && !ev.altKey && kl === 'k') openSwitcher();
     else if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && /^[1-9]$/.test(k)) { const id = stableOrder()[Number(k) - 1]; if (id) setActive(id); }
     else if (ev.ctrlKey && k === 'Tab') cycle(ev.shiftKey ? -1 : 1);
@@ -1512,6 +1529,7 @@
       ['Ctrl+1 … 9', t('help.goTo')],
       ['Ctrl+Tab', t('help.cycle')],
       ['Ctrl+Shift+G', t('help.view')],
+      ['Ctrl+Shift+I', t('help.inbox')],
       ['Ctrl+Shift+M', t('help.messages')],
       ['Ctrl+Shift+W', t('help.remove')],
       ['Ctrl+C / Ctrl+V', t('help.copyPaste')],
@@ -1969,6 +1987,7 @@
   }
 
   function setMessagesOpen(open) {
+    if (open && ui.inboxOpen) setInboxOpen(false, { refocus: false }); // one side panel at a time
     ui.msgOpen = !!open;
     writePref('messagesOpen', ui.msgOpen);
     dom.msgPanel.hidden = !ui.msgOpen;
@@ -2017,6 +2036,204 @@
     writePref('externalOpen', open);
   });
 
+  // ---------------------------------------------------------------- inbox: what's waiting for you
+
+  /**
+   * What a session waits for from you, the most pressing thing only, and since when; null if
+   * nothing. "done" (a finished turn you haven't answered) goes in a folded list of its own.
+   */
+  function waitingFor(v) {
+    if (v.status === 'exited' || v.parked) return null;
+    if (guardOpen(v)) return { kind: 'guard', since: v.guard.since };
+    if (v.status === 'permission') return { kind: 'permission', since: v.statusSince };
+    if (v.status === 'input') return { kind: 'input', since: v.statusSince };
+    if (v.decision) return { kind: 'decision', since: v.decision.since };
+    if (v.waitingSince && (v.status === 'done' || v.status === 'ready')) return { kind: 'done', since: v.waitingSince };
+    return null;
+  }
+
+  const INBOX_LABEL = {
+    guard: 'status.guard', permission: 'status.permission', input: 'status.input', decision: 'status.decision', done: 'status.done',
+  };
+
+  function renderInbox() {
+    const items = [];
+    for (const e of ui.sessions.values()) {
+      const w = waitingFor(e.view);
+      if (w) items.push({ e, ...w });
+    }
+    items.sort((a, b) => a.since - b.since);
+    const pressing = items.filter((x) => x.kind !== 'done');
+    const done = items.filter((x) => x.kind === 'done');
+    if (!ui.inboxOpen) return; // the counter in the header (updateAttention) says how many need you
+    syncInboxList(dom.ibList, pressing);
+    syncInboxList(dom.ibDoneList, done);
+    for (const [id, c] of ui.inboxCards) if (!c.li.isConnected) ui.inboxCards.delete(id);
+    dom.ibEmpty.hidden = pressing.length > 0;
+    dom.ibEmpty.textContent = pressing.length ? '' : t('inbox.empty');
+    dom.ibDone.hidden = done.length === 0;
+    dom.ibDoneCount.textContent = String(done.length);
+    const open = readPref('inboxDoneOpen', false);
+    dom.ibDoneToggle.setAttribute('aria-expanded', String(open));
+    dom.ibDoneList.hidden = !open;
+  }
+
+  /** Puts the cards in order, moving only those out of place (a moved textarea would lose focus). */
+  function syncInboxList(list, items) {
+    const nodes = items.map(inboxCard);
+    nodes.forEach((n, i) => { if (list.children[i] !== n) list.insertBefore(n, list.children[i] || null); });
+    while (list.children.length > nodes.length) list.lastElementChild.remove();
+  }
+
+  function inboxCard(x) {
+    const v = x.e.view;
+    let c = ui.inboxCards.get(v.id);
+    if (!c || c.kind !== x.kind) {
+      c = buildInboxCard(v.id, x.kind);
+      ui.inboxCards.set(v.id, c);
+    }
+    fillInboxCard(c, x);
+    return c.li;
+  }
+
+  function buildInboxCard(id, kind) {
+    const c = { id, kind, li: el('li', 'ib-card') };
+    c.li.dataset.kind = kind;
+    const head = el('div', 'ib-head');
+    c.badge = el('span', 'mono');
+    c.name = el('button', 'ib-name');
+    c.name.addEventListener('click', () => setActive(id));
+    c.time = el('span', 'ib-time');
+    head.append(c.badge, c.name, c.time);
+    c.label = el('div', 'ib-label');
+    c.text = el('div', 'ib-text');
+    c.li.append(head, c.label, c.text);
+
+    if (kind === 'decision' || kind === 'done') {
+      c.context = el('details', 'ib-context');
+      const summary = el('summary', null, t('inbox.context'));
+      c.ctx = el('div', 'ib-ctx');
+      c.context.append(summary, c.ctx);
+      c.context.addEventListener('toggle', () => { if (c.context.open) fillContext(c); });
+      c.li.appendChild(c.context);
+    }
+    if (kind === 'decision') {
+      const answer = el('div', 'ib-answer');
+      c.ta = el('textarea');
+      c.ta.rows = 2;
+      c.ta.placeholder = t('inbox.placeholder');
+      c.ta.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing) {
+          ev.preventDefault();
+          sendInboxReply(c);
+        }
+      });
+      c.note = el('div', 'ib-note', t('inbox.hint'));
+      answer.append(c.ta, c.note);
+      c.li.appendChild(answer);
+    }
+    const actions = el('div', 'ib-actions');
+    const open = el('button', 'btn-secondary', t('inbox.open'));
+    open.addEventListener('click', () => setActive(id));
+    actions.appendChild(open);
+    if (kind === 'decision' || kind === 'done') {
+      const dismiss = el('button', 'btn-secondary', t('inbox.dismiss'));
+      dismiss.title = t('inbox.dismissTitle');
+      dismiss.addEventListener('click', () => api.dismissWaiting(id));
+      actions.appendChild(dismiss);
+    }
+    if (kind === 'decision') {
+      c.send = el('button', 'btn-primary ib-send', t('inbox.send'));
+      c.send.addEventListener('click', () => sendInboxReply(c));
+      actions.appendChild(c.send);
+    }
+    c.li.appendChild(actions);
+    return c;
+  }
+
+  function fillInboxCard(c, x) {
+    const v = x.e.view;
+    c.li.dataset.status = x.kind === 'guard' ? 'permission' : x.kind === 'decision' ? 'input' : v.status;
+    setBadge(c.badge, v);
+    c.name.textContent = v.name;
+    c.name.title = v.cwd;
+    c.time.textContent = ago(x.since);
+    c.time.title = new Date(x.since).toLocaleString(t.locale);
+    c.label.textContent = t(INBOX_LABEL[x.kind]);
+    let text = '';
+    if (x.kind === 'guard') text = t('inbox.guardText');
+    else if (x.kind === 'permission') text = [permissionText(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
+    else if (x.kind === 'input') text = [oneLine(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
+    else if (x.kind === 'decision') text = v.decision.text;
+    else text = oneLine(v.lastReply, 240);
+    if (c.text.textContent !== text) c.text.textContent = text;
+    if (c.context && c.context.open) fillContext(c);
+    if (c.ta) {
+      const idle = v.status === 'done' || v.status === 'ready';
+      c.ta.disabled = !idle;
+      c.send.disabled = !idle;
+      if (!idle) setInboxNote(c, t('inbox.notIdle'));
+      else if (c.noteIsBusy) setInboxNote(c, t('inbox.hint'));
+      c.noteIsBusy = !idle;
+    }
+  }
+
+  /** Your last message to it and its full answer: what it's about, without opening the session. */
+  function fillContext(c) {
+    const v = ui.sessions.get(c.id)?.view;
+    if (!v) return;
+    const parts = [];
+    if (v.lastPrompt) parts.push(el('span', 'ib-ctx-who', t('inbox.you')), el('div', 'ib-ctx-text', v.lastPrompt));
+    if (v.lastReply) parts.push(el('span', 'ib-ctx-who', t('inbox.it')), el('div', 'ib-ctx-text', v.lastReply));
+    const key = `${v.lastPrompt}\u0000${v.lastReply}`;
+    if (c.ctxKey === key) return;
+    c.ctxKey = key;
+    c.ctx.replaceChildren(...parts);
+  }
+
+  function setInboxNote(c, text, err = false) {
+    c.note.textContent = text;
+    c.note.classList.toggle('err', err);
+  }
+
+  async function sendInboxReply(c) {
+    const text = c.ta.value.trim();
+    if (!text || c.send.disabled) return;
+    c.send.disabled = true;
+    let r = null;
+    try { r = await api.replyTo(c.id, text); } catch { /* reported below */ }
+    if (r && r.ok) {
+      c.ta.value = '';
+      setInboxNote(c, t('inbox.sent'));
+    } else {
+      c.send.disabled = false;
+      setInboxNote(c, (r && r.error) || t('inbox.failed'), true);
+    }
+  }
+
+  function setInboxOpen(open, { refocus = true } = {}) {
+    if (open && ui.msgOpen) setMessagesOpen(false); // one side panel at a time
+    ui.inboxOpen = !!open;
+    writePref('inboxOpen', ui.inboxOpen);
+    dom.inboxPanel.hidden = !ui.inboxOpen;
+    dom.inboxBtn.setAttribute('aria-pressed', String(ui.inboxOpen));
+    if (ui.inboxOpen) {
+      renderInbox();
+      layout();
+    } else {
+      layout();
+      if (refocus) focusActive();
+    }
+  }
+
+  dom.inboxBtn.addEventListener('click', () => setInboxOpen(!ui.inboxOpen));
+  dom.attn.addEventListener('click', () => setInboxOpen(true));
+  $('#ib-close').addEventListener('click', () => setInboxOpen(false));
+  dom.ibDoneToggle.addEventListener('click', () => {
+    writePref('inboxDoneOpen', !readPref('inboxDoneOpen', false));
+    renderInbox();
+  });
+
   // ---------------------------------------------------------------- wiring
 
   $('#btn-new').addEventListener('click', openNewSession);
@@ -2058,6 +2275,7 @@
   setInterval(() => {
     for (const e of ui.sessions.values()) $('.sess-time', e.item).textContent = ago(e.view.statusSince);
     if (ui.msgOpen) for (const n of dom.msgList.querySelectorAll('.msg-time')) n.textContent = ago(Number(n.dataset.at));
+    renderInbox(); // its times
   }, 30000);
 
   (async () => {
@@ -2091,6 +2309,7 @@
     renderExternal(data.external || []);
     ui.messages = Array.isArray(data.messages) ? data.messages : [];
     setMessagesOpen(ui.msgOpen);
+    if (ui.inboxOpen) setInboxOpen(true, { refocus: false });
     layout();
     const first = data.activeId && ui.sessions.has(data.activeId) ? data.activeId : ui.order[0];
     if (first) setActive(first);
