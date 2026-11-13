@@ -2158,6 +2158,8 @@
       c.ctx = el('div', 'ib-ctx');
       c.context.append(summary, c.ctx);
       c.context.addEventListener('toggle', () => { if (c.context.open) fillContext(c); });
+      // A decision's message is the card the session wrote for you (context, options): open.
+      c.context.open = kind === 'decision';
       c.li.appendChild(c.context);
     }
     if (kind === 'decision') {
@@ -2221,17 +2223,159 @@
     }
   }
 
-  /** Your last message to it and its full answer: what it's about, without opening the session. */
-  function fillContext(c) {
+  /**
+   * The last message it got and the whole of its answer, as Markdown: what it's about, without
+   * opening the session. Fetched when it changes (the view only carries the first 2000 characters).
+   */
+  async function fillContext(c) {
     const v = ui.sessions.get(c.id)?.view;
     if (!v) return;
-    const parts = [];
-    if (v.lastPrompt) parts.push(el('span', 'ib-ctx-who', t('inbox.you')), el('div', 'ib-ctx-text', v.lastPrompt));
-    if (v.lastReply) parts.push(el('span', 'ib-ctx-who', t('inbox.it')), el('div', 'ib-ctx-text', v.lastReply));
     const key = `${v.lastPrompt}\u0000${v.lastReply}`;
     if (c.ctxKey === key) return;
     c.ctxKey = key;
+    let ctx = null;
+    try { ctx = await api.inboxContext(c.id); } catch { /* falls back to the view */ }
+    if (c.ctxKey !== key) return; // changed again meanwhile
+    const prompt = ctx ? ctx.prompt : v.lastPrompt;
+    const reply = ctx ? ctx.reply : v.lastReply;
+    const parts = [];
+    if (prompt) parts.push(el('span', 'ib-ctx-who', t('inbox.you')), mdBlock(prompt));
+    if (reply) parts.push(el('span', 'ib-ctx-who', t('inbox.it')), mdBlock(reply));
     c.ctx.replaceChildren(...parts);
+  }
+
+  function mdBlock(text) {
+    const box = el('div', 'ib-ctx-text md');
+    box.appendChild(renderMarkdown(text));
+    return box;
+  }
+
+  // ---- a small Markdown renderer: what sessions write (headings, lists, tables, code, quotes,
+  // bold, links). It builds DOM nodes from the text, never HTML, so nothing in it can run.
+
+  const MD_LIST = /^(\s*)([-*+•]|\d+[.)])\s+(.*)$/;
+  const MD_TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+  const MD_BLOCK_START = /^\s*(```|~~~|#{1,6}\s|>|([-*+•]|\d+[.)])\s+)/;
+
+  function renderMarkdown(src) {
+    const frag = document.createDocumentFragment();
+    const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+    const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((x) => x.trim());
+    const isTable = (k) => /^\s*\|/.test(lines[k] || '') && MD_TABLE_SEP.test(lines[k + 1] || '');
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) { i++; continue; }
+      const fence = /^\s*(```|~~~)/.exec(line);
+      if (fence) {
+        const buf = [];
+        i++;
+        while (i < lines.length && !lines[i].trim().startsWith(fence[1])) buf.push(lines[i++]);
+        i++;
+        frag.appendChild(el('pre', 'md-code', buf.join('\n')));
+        continue;
+      }
+      if (isTable(i)) {
+        const table = el('table', 'md-table');
+        const head = el('tr');
+        for (const x of cells(line)) { const th = el('th'); th.appendChild(mdInline(x)); head.appendChild(th); }
+        const thead = el('thead');
+        thead.appendChild(head);
+        const tbody = el('tbody');
+        i += 2;
+        while (i < lines.length && /^\s*\|/.test(lines[i])) {
+          const tr = el('tr');
+          for (const x of cells(lines[i])) { const td = el('td'); td.appendChild(mdInline(x)); tr.appendChild(td); }
+          tbody.appendChild(tr);
+          i++;
+        }
+        table.append(thead, tbody);
+        const wrap = el('div', 'md-table-wrap');
+        wrap.appendChild(table);
+        frag.appendChild(wrap);
+        continue;
+      }
+      const h = /^\s*#{1,6}\s+(.*)$/.exec(line);
+      if (h) {
+        const n = el('div', 'md-h');
+        n.appendChild(mdInline(h[1].replace(/\s+#+\s*$/, '')));
+        frag.appendChild(n);
+        i++;
+        continue;
+      }
+      if (/^\s*>/.test(line)) {
+        const buf = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
+        const q = el('blockquote', 'md-quote');
+        q.appendChild(renderMarkdown(buf.join('\n')));
+        frag.appendChild(q);
+        continue;
+      }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { frag.appendChild(el('hr', 'md-hr')); i++; continue; }
+      const first = MD_LIST.exec(line);
+      if (first) {
+        const ordered = /\d/.test(first[2]);
+        const list = el(ordered ? 'ol' : 'ul', 'md-list');
+        const start = /^(\d+)/.exec(first[2]);
+        if (start && start[1] !== '1') list.start = Number(start[1]);
+        while (i < lines.length) {
+          const m = MD_LIST.exec(lines[i]);
+          // Bullets after numbers (or the other way round) start another list, unless nested.
+          if (m && m[1].length < 2 && /\d/.test(m[2]) !== ordered) break;
+          if (m) {
+            const item = el('li');
+            if (m[1].length >= 2) item.classList.add('md-sub');
+            item.appendChild(mdInline(m[3]));
+            list.appendChild(item);
+            i++;
+          } else if (/^\s{2,}\S/.test(lines[i]) && list.lastChild) {
+            list.lastChild.append(el('br'), mdInline(lines[i].trim())); // an item that goes on
+            i++;
+          } else {
+            break;
+          }
+        }
+        frag.appendChild(list);
+        continue;
+      }
+      const p = el('p', 'md-p');
+      let n = 0;
+      while (i < lines.length && lines[i].trim() && (n === 0 || (!MD_BLOCK_START.test(lines[i]) && !isTable(i)))) {
+        if (n++) p.appendChild(el('br'));
+        p.appendChild(mdInline(lines[i++].trim()));
+      }
+      frag.appendChild(p);
+    }
+    return frag;
+  }
+
+  const MD_INLINE = /(`+)([^`]+?)\1|\*\*(.+?)\*\*|__(.+?)__|\*([^*\s](?:[^*]*?[^*\s])?)\*|(?<![\p{L}\p{N}])_([^_\s](?:[^_]*?[^_\s])?)_(?![\p{L}\p{N}])|\[([^\]]+)\]\(([^)\s]+)\)/gu;
+
+  function mdInline(text) {
+    const frag = document.createDocumentFragment();
+    const re = new RegExp(MD_INLINE.source, MD_INLINE.flags);
+    let last = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      if (m[2] !== undefined) frag.appendChild(el('code', 'md-inline', m[2]));
+      else if (m[3] !== undefined || m[4] !== undefined) { const b = el('strong'); b.appendChild(mdInline(m[3] ?? m[4])); frag.appendChild(b); }
+      else if (m[5] !== undefined || m[6] !== undefined) { const e = el('em'); e.appendChild(mdInline(m[5] ?? m[6])); frag.appendChild(e); }
+      else {
+        const url = m[8];
+        const a = el('a', 'md-link');
+        a.appendChild(mdInline(m[7]));
+        a.title = url;
+        if (/^https?:\/\//i.test(url)) {
+          a.href = '#';
+          a.addEventListener('click', (ev) => { ev.preventDefault(); api.openExternal(url); });
+        }
+        frag.appendChild(a);
+      }
+      last = re.lastIndex;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    return frag;
   }
 
   function setInboxNote(c, text, err = false) {

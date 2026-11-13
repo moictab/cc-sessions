@@ -37,6 +37,7 @@ const SELF_RESTARTS_PER_HOUR = 6;
 const APP_NOTE = '[CC Sessions]';
 // The longest an image-guard window can stay open: Claude Code kills a hook after this long.
 const GUARD_MAX_MS = 3700 * 1000;
+const FULL_REPLY = 20000; // characters of a session's last answer kept for the inbox
 
 class SessionManager extends EventEmitter {
   /** `t(key, vars)` translates into the interface language of the moment (see shared/i18n.js). */
@@ -105,6 +106,8 @@ class SessionManager extends EventEmitter {
       detail: '',
       lastPrompt: rec.lastPrompt || '',
       lastReply: rec.lastReply || '',
+      // The whole of it, for the inbox's context (a decision card easily runs past lastReply's 2000).
+      fullReply: typeof rec.fullReply === 'string' ? rec.fullReply.slice(0, FULL_REPLY) : rec.lastReply || '',
       interrupted: !!rec.interrupted,
       createdAt: rec.createdAt || Date.now(),
       statusSince: Date.now(),
@@ -437,6 +440,7 @@ class SessionManager extends EventEmitter {
       case 'Stop':
         if (typeof p.last_assistant_message === 'string') {
           s.lastReply = p.last_assistant_message.slice(0, 2000);
+          s.fullReply = p.last_assistant_message.slice(0, FULL_REPLY);
           const asked = findDecision(p.last_assistant_message);
           if (asked && (!s.decision || s.decision.text !== asked)) s.decision = { text: asked, since: Date.now() };
         }
@@ -474,6 +478,12 @@ class SessionManager extends EventEmitter {
     s.decision = null;
     this.emit('update', this.view(s));
     this.emit('persist');
+  }
+
+  /** For the inbox: the last message the session got and the whole of its answer. */
+  context(id) {
+    const s = this.sessions.get(id);
+    return s ? { prompt: s.lastPrompt, reply: s.fullReply || s.lastReply } : null;
   }
 
   /** The user takes it off the inbox without answering (dealt with elsewhere, or stale). */
@@ -929,6 +939,7 @@ class SessionManager extends EventEmitter {
       resumeNote: s.resumeNote,
       waitingSince: s.waitingSince,
       decision: s.decision,
+      fullReply: s.fullReply,
     }));
   }
 

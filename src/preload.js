@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('ccsm', {
   clearInterrupted: (id) => ipcRenderer.invoke('session:clear-interrupted', id),
   replyTo: (id, text) => ipcRenderer.invoke('inbox:reply', id, text),
   dismissWaiting: (id) => ipcRenderer.invoke('inbox:dismiss', id),
+  inboxContext: (id) => ipcRenderer.invoke('inbox:context', id),
   write: (id, data) => ipcRenderer.send('pty:write', id, data),
   resize: (id, cols, rows) => ipcRenderer.send('pty:resize', id, cols, rows),
 

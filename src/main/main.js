@@ -356,6 +356,7 @@ function registerIpc() {
   // The inbox: the user's answer to a session waiting for them, or taking it off the list.
   ipcMain.handle('inbox:reply', (_e, id, text) => manager.reply(id, text));
   ipcMain.handle('inbox:dismiss', (_e, id) => manager.dismissWaiting(id));
+  ipcMain.handle('inbox:context', (_e, id) => manager.context(id));
   ipcMain.on('pty:write', (_e, id, data) => manager.write(id, data));
   ipcMain.on('pty:resize', (_e, id, cols, rows) => manager.resize(id, cols, rows));
 
