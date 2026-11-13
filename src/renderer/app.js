@@ -2213,12 +2213,14 @@
     c.name.title = v.cwd;
     c.time.textContent = ago(x.since);
     c.time.title = new Date(x.since).toLocaleString(t.locale);
-    c.label.textContent = t(INBOX_LABEL[x.kind]);
+    // The question's label (D5, S1…) as a mark of its own, however the session wrote it ("S1.", "D5:", "S1 —").
+    const label = x.ask && x.ask.label;
+    c.label.replaceChildren(t(INBOX_LABEL[x.kind]), ...(label ? [el('span', 'ib-mark', label)] : []));
     let text = '';
     if (x.kind === 'guard') text = t('inbox.guardText');
     else if (x.kind === 'permission') text = [permissionText(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
     else if (x.kind === 'input') text = [oneLine(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
-    else if (x.kind === 'decision') text = x.ask.text;
+    else if (x.kind === 'decision') text = label ? x.ask.text.replace(/^[A-Z]{1,2}\d{1,2}\s*[:.)—–-]\s*/u, '') : x.ask.text;
     else text = oneLine(v.lastReply, 240);
     if (c.text.textContent !== text) c.text.textContent = text;
     if (c.context && c.context.open) fillContext(c);
