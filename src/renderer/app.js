@@ -917,7 +917,7 @@
     else {
       let i = 0;
       for (const c of name) if (c === q[i]) i++;
-      if (i === q.length) s = 20; // letters in order: "cgw" -> comfyui-gateway
+      if (i === q.length) s = 20; // letters in order: "bsv" -> billing-service
     }
     return s;
   }
