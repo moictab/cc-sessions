@@ -1,0 +1,155 @@
+# CC Sessions: the full guide
+
+**English** · [Español](guia.md) · [Back to the README](../README.md)
+
+Everything the app does, in detail, and how it works inside.
+
+## Install
+
+You need Windows 11, [Node.js](https://nodejs.org/) 20 or later (with npm) and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed, either in `~/.local/bin/claude.exe`, on the PATH, or pointed to with the `CC_SESSIONS_CLAUDE` variable.
+
+```powershell
+git clone https://github.com/moictab/cc-sessions.git
+cd cc-sessions
+npm install
+npm start
+```
+
+`npm install` downloads Electron, about 100 MB. Nothing gets compiled: the native part (`node-pty`) ships prebuilt binaries for Windows x64.
+
+The first time it starts, the app creates a **CC Sessions** shortcut in the Start menu. From then on you open it from there, like any other application. Windows needs that shortcut to show its notifications.
+
+The interface is in English by default; Spanish is available in Settings → Interface → Language.
+
+### Update
+
+Close the app and run:
+
+```powershell
+git pull
+npm install
+```
+
+The next time you open it you'll have the new version. Your sessions and settings are stored separately, in `%APPDATA%\cc-sessions`, so they're kept. Earlier versions used `%APPDATA%\cc-session-manager`; the app moves that folder by itself the first time.
+
+### Uninstall
+
+Close the app, delete the repo folder and run this in PowerShell:
+
+```powershell
+$programs = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+Remove-Item "$programs\CC Sessions.lnk"
+Remove-Item -Force "$programs\Electron.lnk"   # hidden (see below); skip it if another Electron app of yours uses it
+Remove-Item -Recurse "HKCU:\Software\Classes\CLSID\{BCF46518-8493-477A-95C6-86BB944559F2}"   # notifications
+Remove-Item -Recurse "$env:APPDATA\cc-sessions"   # your sessions and settings; optional
+```
+
+### The administrator helper
+
+Administrator sessions (see below) run through a small helper that has to be installed by an administrator, in a folder only administrators can write: the app never elevates anything from the repo, which your user can change. From an elevated PowerShell, in the repo:
+
+```powershell
+powershell -NoProfile -File admin-host\install.ps1
+```
+
+It copies `admin-host.js`, node-pty and your `node.exe` to `C:\Program Files\CC Sessions\admin-host` and checks every file there against `admin-host\manifest.json` (SHA-256), and `node.exe` by its signature (OpenJS Foundation). The first time it writes `admin-host.json`, the helper's configuration, from `admin-host.example.json`. Set in it:
+
+- `claudeExe`: the `claude.exe` the sessions run, in a folder only administrators can write (not the one you update as yourself). It has to be signed by Anthropic.
+- `configDir`, `profileDir` and `tempDir`: where those sessions keep Claude's configuration, their home folder (Git Bash's `.bashrc`, git's `.gitconfig`…) and their temporary files. All three only for administrators.
+- `allowedRoots`: the folders those sessions may work in, also only for administrators.
+
+Run it again after an update that changes the helper (`admin-host\manifest.json` changes with it; the app says so if the installed one is from another version). To remove it, delete `C:\Program Files\CC Sessions`.
+
+### The hidden `Electron.lnk` shortcut
+
+When it shows its first notification, Electron creates a Start menu shortcut on its own, named after its executable's product name, `Electron.lnk`, and the Start menu would then show the app as "Electron". To avoid that, the app creates that file itself at startup, already valid so Electron leaves it alone and hidden so the Start menu ignores it. Since the name is the same for every unpackaged Electron app, if you develop other Electron apps the shortcut may end up pointing at whichever one showed a notification last. Electron also registers the command Windows runs when you click an old notification while the app is closed (the `CLSID` key above), but without the app's folder; the app adds it.
+
+## Icon
+
+A `>_` prompt with three status lights (your turn, needs permission, working), in the app's own colors. It's drawn in code in `scripts/build-icon.js`, and `npm run icon` regenerates `assets/icon.ico`, `icon.png`, `icon.svg` and `mark.svg` (the small version in the sidebar). Up to 32 px the drawing snaps to whole pixels so it stays sharp.
+
+## What it does
+
+- **Live status for every session**: Starting, Ready, Working, **Needs permission** (with the exact tool and command), **Asking you** (with the question), **Your turn** (with the start of the answer), Interrupted and Closed. Each status has its own animation in the indicator:
+
+  | Status | Indicator |
+  |---|---|
+  | Starting | Braille spinner, like a loading terminal |
+  | Ready | Still grey dot |
+  | Working | The same glyphs as Claude Code's spinner (`· ✢ ✳ ✶ ✻ ✽`), and the word "Working" with a shimmer running across it |
+  | Needs permission | Pulsing amber dot, with a ripple |
+  | Asking you | A wobbling violet `?`, with a ripple |
+  | Your turn | Green dot that pops in with a burst; it glows until you've looked at that session |
+  | Interrupted | Amber pause bars |
+  | Closed | Hollow ring |
+
+  The animations play even if Windows animation effects are turned off, because here the motion is the information. You can turn them off in Settings → Interface → "Animate the status indicators".
+- **Badges**: each session has a colored badge with its initials (CS, PE…) in the list, the top bar and the grid. Colors are handed out so they don't repeat (up to 12); change one with right-click → Color.
+- **An organized list**: the sessions that need you (a permission, a question, or a finished turn you haven't looked at) go to the top, under "Needs you". A turn that a note of the app or another session's message started ("CC Sessions has restarted", say) ends quietly: no dot, no notification, it doesn't go up, unless it asks you something. The rest follow your groups: right-click a session → Move to group → New group…, or drag sessions between groups. Click a group's header to fold it (a folded group still shows one dot per session), double-click it to rename it, right-click it to reorder or delete it. Or, in Settings → Interface → Session list → By status: needs you, working, idle.
+- **Decisions**: a session that ends its turn with a line `[project] I need your decision: <question>` is asking you to decide something, and so is one that ends it with a "Waiting on you:" block (the list of what it's waiting for from you, D1, D2…). Each question is one entry: the block's items, or, when the line comes with numbered questions (D1, D2…, as the rule asks for several), each of them. It shows "Needs your decision" with the question (or how many, and which), and stays under "Needs you" until you answer, even after you've looked at it and across restarts of the app. An item that asks you to do something rather than to decide (not numbered, no question mark, and no options, like "Run the command above and reply «hecho»") shows "Needs you to do something" instead, and its card has a "Done" button. Only your own prompt counts as an answer: other sessions' messages and the app's notes don't. A prompt that names some of them ("D5: yes", or a range, "D4–D6: yes") answers those; one that names none answers only the unnumbered ones, which can't be named, so asking the session something else doesn't make its numbered questions go away. A new question adds to the ones still open; a "Waiting on you" block is the whole list, so what it leaves out is closed, and "Waiting on you: nothing" closes them all. If it asked earlier in the turn and then went on with other things, as the rule tells it to, or asked before the app was running, the app finds it in the session's transcript, among what it has said since your last message; what you've discarded doesn't come back. The rule ([an example for your `CLAUDE.md`](../README.md#decision-cards)) has each decision in a block of its own, numbered (`D1.` and the question), with `Summary:` (about 50 words), `Options:` (separated by `|`, the recommended one marked `(recommended)`), `If you don't answer:` and `Context:` (plain explanation, not a copy of the conversation), at most three per message. The app reads those parts for the inbox. The same in Spanish works too (`Necesito tu decisión`, `Pendiente de ti`, `Resumen:`, `Opciones:`, `Si no contestas:`, `Contexto:`). The line is found anywhere in the message, even with quote marks, bold or a `>` in front, but not inside a code block. (A session only follows the convention if your `CLAUDE.md` tells it to.)
+- **image-guard windows**: while image-guard's consent window is open in a session, the session shows "Needs your consent" and goes under "Needs you", although it's still in the middle of its turn. The app only shows it: you always answer in image-guard's own window.
+- **Waiting for you** (the tray button next to New, the counter beside the name, or `Ctrl+Shift+I`): one panel with every session waiting for you, oldest first: image-guard windows, permission prompts, questions and decisions. Each card says how long it has been waiting and what it asks, as the session wrote it, and "Context" shows your last message to it and its full answer, so you don't have to ask it what it was about. Each question has its own card: its question, its summary, what the session does if you don't answer, and a button for each option (the recommended one stands out); a button types "D1: Yes" into the session, as if you had. "Context" shows the session's own explanation, or, for decisions asked the old way, your last message to it and its full answer. A decision can be answered right there, and only that card goes: with several open, the answer goes in with its label or topic in front ("D6: no", "Backups: …"), so the session knows what it answers. It's typed into the session as your prompt (Enter sends it, Shift+Enter starts a new line), even while it works: it waits in its queue and the session reads it at its next step, as when you type in its terminal. Permissions and questions are answered in the session, since typing into them blind could pick the wrong option, and image-guard's windows only in image-guard's window. Below, folded, are the turns that ended without asking anything and that you haven't answered yet. "Discard" takes one off the list without answering.
+- **Phone notice** (Settings): when sessions have been waiting for your answer longer than the minutes you set (a decision, a permission, a question or an image-guard window; not finished turns) and you're away from the PC (no keyboard or mouse for 2 minutes, or it's locked), the app runs a command of your choice with a one-line notice as its last argument, for instance `ssh` to a machine that forwards it to a chat. The notice says how many sessions wait, which ones and for how long, never what they ask. At most one every 10 minutes, each wait in one notice only, 30 s at most per run and no retries. The command runs without a shell; "double quotes" keep spaces together and `%VARIABLES%` are expanded. "Send a test" tries it right away.
+- **Quick switcher** (`Ctrl+Shift+K`, or the magnifier at the bottom of the sidebar): type part of a name, its initials, a group or a folder, and press Enter.
+- **Alerts**: when the window isn't in the foreground you get a Windows notification and the taskbar button flashes. The window title and the badge show how many sessions need you. Clicking the notification takes you to the session.
+- **Save and restore**: on close, the open sessions are saved along with their order, the view and the window position. On open, each one is relaunched with `claude --resume <id>`. The state is also saved continuously, so it survives a crash.
+- **Interrupted sessions**: if you close while one is working, the app warns you. When you come back, that session shows a notice with an "Ask it to continue" button.
+- **Resume conversations**: "New" lists your recent projects (taken from `~/.claude/projects`) and, for each one, its conversations with title, last prompt and date. It marks the ones already open here or in another terminal.
+- **Messages between sessions**: the envelope button (`Ctrl+Shift+M`) opens a panel with what your sessions tell each other with `SendMessage`: sender → recipient, the full text and whether it has been read. Names of sessions in the app take you to them. Messages leaving a session in the app and messages reaching one are logged, even when the other end is in another terminal.
+- **Sessions outside the app**: at the bottom of the sidebar you'll see the Claude sessions you have open in other terminals.
+- **Per-session plugins**: the puzzle-piece button at the top right turns a plugin on or off for that session only, without touching your settings or the project's. For now it handles Playwright, which starts its own server in every session where it's enabled and is best left off when unused. The session itself can also ask for it with the `set_plugin` tool (see "MCP server" below). Applying it requires restarting the session: if it's working, the app waits for the turn to end, showing "↻ restart pending" meanwhile.
+- **Restart** (the circular arrow at the top right): resumes the same conversation, but closes the process, so the session's background tasks are lost (commands, monitors, subagents, scheduled reminders) and Remote Control reconnects. The app warns you first and can leave the session a note when it's back, so it tells you if it had anything running. If the session asked for the restart itself, the note asks it to relaunch whatever is needed and carry on.
+- **Administrator sessions**: right-click a session → Run as administrator. It restarts on the same conversation after you accept the Windows prompt, and from then on it's a session like any other, marked with a shield. The prompt comes up once per app run: restarts and other administrator sessions reuse the permission. When you reopen the app, administrator sessions wait for you to press "Start as administrator", so the prompt never shows up by itself. **Mind the trade-off**: as administrator, whatever the session runs has full control of the PC, and CC Sessions, which isn't elevated, can type into it, so a program running as you could use the app to act as administrator. That's why Windows Terminal doesn't mix elevated and normal tabs in one window. It only works with your own account: if the prompt is answered with another one, the session doesn't start. It needs the administrator helper installed first (see "The administrator helper" above). Right before the Windows prompt the app says it's coming, and for which session: the prompt reads "Windows Command Processor", so one that shows up without that notice is a warning sign. As administrator the session has its own Claude configuration, home and temporary folders, all writable only by administrators, and doesn't load your project's settings or MCP servers.
+- **Restarting the app** (the power button at the bottom of the sidebar): restarting closes every session's process, and with it its background tasks. So first every open session can be asked to stop them (commands, monitors, scheduled reminders, subagents), not start new ones until told otherwise, and leave unfinished work where it can pick it up. Idle sessions get the request typed in; working ones read it with the result of their next step (their `PostToolUse` hook), so nothing is typed over what they're doing; one waiting for your permission or answer is left alone until you've replied. The panel shows how each one is doing and what it answered. Then restart, or just close the app; when they're back, each one is told to relaunch what it stopped and carry on (a checkbox turns that off, and they wait for you). Calling it off tells them they can carry on.
+- **Views**: one session full-size, or all of them in a grid.
+- **Settings** (`Ctrl+,` or the sliders button at the bottom of the sidebar): the language (English, the default, or Spanish), the font and size of every terminal, and whether the status indicators are animated. The list shows your installed monospaced fonts, each written in its own typeface, with a search box. Changes show up at once in every session. By default the font and size come from Windows Terminal.
+
+## Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Shift+N` | New session or resume a conversation |
+| `Ctrl+Shift+K` | Find a session by name, initials, group or folder |
+| `Ctrl+Shift+J` | Go to the next session that needs you (permission > question > finished) |
+| `Ctrl+1` … `Ctrl+9` | Go to session N (hold Ctrl for a moment to see the numbers in the list) |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session |
+| `Ctrl+Shift+G` | Toggle single / grid |
+| `Ctrl+Shift+I` | Waiting for you: decisions, permissions, questions |
+| `Ctrl+Shift+M` | Messages between sessions |
+| `Ctrl+Shift+W` | Remove the current session (the conversation is kept) |
+| `Ctrl+C` / `Ctrl+V` | Copy (with a selection) / paste. With no text on the clipboard, `Ctrl+V` goes to Claude so you can paste images |
+| Right-click | Copy the selection or paste |
+| `Shift+Enter` | New line in the prompt |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Font size (`Ctrl+0`: Windows Terminal's) |
+| `Ctrl+,` | Settings |
+| `F12` | DevTools |
+
+At the top right of each session: the session's plugins (puzzle piece), restart (circular arrow) and remove (✕).
+
+Right-click a session in the list for its color, group, rename, restart and remove. Double-click the name to rename it; if you rename it from Claude with `/rename`, the app picks that up too. Drag in the list to reorder.
+
+## How it works
+
+- **Terminals**: Electron + [xterm.js](https://xtermjs.org/) with the WebGL renderer + [node-pty](https://github.com/microsoft/node-pty) (ConPTY). Unless you choose otherwise in Settings, the font and size are read from Windows Terminal's default profile, so sessions look the same as there. The font list comes from Chromium's Local Font Access API (`queryLocalFonts`), filtered to monospaced fonts; it loads a few seconds after startup because reading it takes a while. The last line of each terminal always sits 8 px from the bottom edge.
+- **Status**: each session is launched with `--settings <file>`, which adds hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`). Each hook runs `curl.exe` against a local HTTP server (`127.0.0.1`, random port and a token) with the terminal's id in the URL. **Your `~/.claude/settings.json` is not modified**: the hooks only exist in the sessions the app launches.
+- **Agent view off**: the same file sets `disableAgentView`. In agent view, ← on an empty prompt sends the conversation to the background, run by Claude's own supervisor, out of the pane and out of the app. `claude agents` in a terminal of your own still works.
+- **Session IDs**: new conversations start with a `--session-id <uuid>` chosen by the app, so it always knows what to resume. If you run `/clear`, the `SessionStart` hook reports the new id.
+- **Fallback**: the app also watches `~/.claude/sessions/<pid>.json`, the registry where each Claude session publishes whether it's `busy` or `idle` (and its name). It's used to correct the status if a hook is missed (for example when you deny a permission), to follow `/rename`, and to detect sessions open outside the app. It's an internal Claude Code format, so it's only a secondary signal.
+- **Messages**: on the sender's side, the `PostToolUse` hook for `SendMessage` gives the recipient, the text and the delivery confirmation. On the recipient's side, the message arrives as a `UserPromptSubmit` wrapped in `<cross-session-message from-name="…">`. When both ends are in the app, the two observations are merged into one record that goes from "in their inbox" to "read". Replies are usually addressed to the session's socket (`uds:\\.\pipe\…`) rather than its name, so the app resolves them through the session registry. Messages to subagents within the same session aren't logged.
+- **image-guard notices**: every session the app starts gets `CC_SESSIONS_GUARD_URL` (`http://127.0.0.1:<port>/guard/<terminalId>`) and `CC_SESSIONS_GUARD_TOKEN` in its environment, which its hooks inherit. image-guard's hook posts `{"event":"open"}` and `{"event":"close"}` there, with the token in `X-CC-Sessions-Token` and optionally `until` (when it gives the window up, in ms), and the app answers 204 at once. Windows are counted, since several can be open at once, and a close without its open is ignored. Each one is dropped at its `until` or, at the latest, after 3,700 s (when Claude Code kills a hook), in case the close never comes. The token only lets these notices through, but it's in the environment, so anything a session runs can read it: at worst it could put a made-up entry on the list.
+- **MCP server**: the same local server also serves an MCP server (HTTP, `/mcp/<id>`) that the app adds to every session with `--mcp-config`. It doesn't start any process: it's just another route on the app's server. It offers the `set_plugin` tool, which a session uses to turn a plugin on or off for itself only. The app stores the change in that session's `--settings` (`enabledPlugins`, which takes precedence over your settings and the project's). When the turn ends it relaunches the session with `--resume` and types a note so it carries on. To keep a confused session from looping, each one can ask for at most 6 restarts per hour.
+- **Administrator sessions**: Windows only starts an elevated process after its own prompt, and never as a child the app could attach a terminal to. So the first administrator session starts the helper installed in `C:\Program Files\CC Sessions\admin-host` with `Start-Process -Verb RunAs`, through `cmd /d` (which skips cmd's AutoRun) after emptying every variable Node reads as it starts: an elevated process takes its environment from the registry, `HKCU\Environment` included, which your user can write, and `NODE_OPTIONS=--require …` there would run code as administrator. The helper connects back to the app on `127.0.0.1` with a one-time token and runs those sessions in its own ConPTYs, relaying their output and your typing. It trusts nothing else from the app: the app only says which session (ids, name, folder, size, and how its hooks reach the app), and the helper decides the rest. It runs only `claudeExe`, after checking its Authenticode signature, with a fixed command line (`--resume` or `--session-id`, `--name`, `--settings` with a file it writes itself holding the app's status hooks, `--setting-sources user` and `--strict-mcp-config`, so your project's settings and MCP servers aren't loaded) and an environment of its own (fixed `PATH`; `PSModulePath` with the system's modules first and your `Documents\PowerShell\Modules` last, where PowerShell 7 can't put it first; home, AppData and `TEMP` in its admin-only folders; `CLAUDE_CONFIG_DIR`; `DISABLE_UPDATES=1`). The working folder must be inside `allowedRoots`, and it, what Claude reads in it (`.claude`, `.mcp.json`, `CLAUDE.md`, `.git`) and those folders, plus every folder in its `path`, must be writable only by SYSTEM and Administrators, and none of them a link (reparse point); `.git` must be a folder. The folders above all of them must not let anyone else delete, rename or take over what's inside. And since Claude also loads `CLAUDE.md`, `CLAUDE.local.md` and `.claude` from every folder above the working one, nobody else may be able to create them there: `C:\ProgramData` lets anyone create files, so it needs an empty, admin-only marker of each. The app's hooks only report: their answer goes to `NUL`, so the app, which isn't elevated, can't approve a tool or slip context in unseen. What the session hears as it starts comes from a file the helper writes. The command line that starts the helper also sets `PATH` to the system's alone, so node.exe doesn't load DLLs from your folders. Anything else is refused and written to `logs\admin-host.log`, next to it. When the app closes (or crashes) the connection drops, and the helper closes its sessions and exits. The session itself is told it runs as administrator: the app answers its `SessionStart` hook with that as `additionalContext`, so it hears it again on every resume, `/clear` and compaction. (`--append-system-prompt` wouldn't do: Claude reuses a conversation's first system prompt when resuming it.) When you turn it off, the next start tells it it no longer has those rights. For tests, `CC_SESSIONS_ADMIN_NO_ELEVATE` runs the helper without the prompt (and so without rights), and only then `CC_SESSIONS_ADMIN_HOST_DIR` may point at another copy.
+- **Saved data**: `%APPDATA%\cc-sessions\state.json` (sessions with their color, group and plugins, the groups, the view), `settings.json` (Settings; `null` means "the default") and `messages.json` (the last 500 messages). The `CC_SESSIONS_USER_DATA` variable points the app at another folder, for example for tests. `CC_SESSIONS_CLAUDE=<path>` picks the `claude` executable. `CC_SESSIONS_ADMIN_NO_ELEVATE=1` runs administrator sessions through the helper without the prompt (and so without administrator rights), for tests. `CC_SESSIONS_HOOK_LOG=<file>` dumps every hook event as a debugging aid; that file holds your prompts, the commands and the tools' output in plain text, so don't share it.
+
+## Limitations
+
+- Restoring resumes the **conversation**, not unfinished work: whatever a session was running when you closed is cut off, and you have to ask it to continue. Background processes it had started (dev servers, etc.) don't survive either.
+- Opening in the app a conversation that's still alive in another terminal creates two processes on the same conversation. The app warns you first.
+- When you answer a permission prompt or a question, the status switches to "Working" as soon as you press Enter, because Claude emits no hook at that moment. If you answered "No", the registry corrects it within a few seconds.
+- Messages between two sessions that are both outside the app aren't visible.
+- Normal sessions can't connect to an administrator session's message pipe (Windows refuses it), so their messages reach it only through Remote Control, while it's on for that session. Its own messages to them get through as usual.
+- Only tested on Windows 11.
+
+## License
+
+[MIT](../LICENSE).
