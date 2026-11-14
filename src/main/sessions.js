@@ -1182,7 +1182,23 @@ function describeTool(name, input) {
  * nada"), so quoting the rule doesn't count.
  */
 const DECISION_LINE = /^\[([^\]\n]{1,80})\]\s*necesito\s+tu\s+decisi[oó]n\s*:\s*(.+)$/iu;
-const PENDING_HEAD = /^pendiente\s+de\s+ti\s*[:：.]?\s*(.*)$/iu;
+const PENDING_HEAD = /^pendiente\s+de\s+ti\b\s*(.*)$/iu;
+
+/**
+ * A "Pendiente de ti" heading, and the item on its own line if it has one: "Pendiente de ti" →
+ * ''; "Pendiente de ti: D5, la contraseña" → 'D5, la contraseña'; "Pendiente de ti, por orden de
+ * importancia:" → '' (the words before the colon are part of the heading). null: not a heading,
+ * just a sentence that starts that way.
+ */
+function pendingHead(line) {
+  const m = PENDING_HEAD.exec(line);
+  if (!m) return null;
+  const rest = m[1].trim();
+  if (!rest) return '';
+  const sep = /^[:：.]\s*(.*)$/u.exec(rest);
+  if (sep) return /[:：]$/u.test(sep[1]) ? '' : sep[1].trim();
+  return /[:：]$/u.test(rest) ? '' : null;
+}
 const PENDING_NONE = /^(nada|ningun[oa]?|ningún|sin\s+pendientes)\b|^[-—–]$/iu;
 const PENDING_EMPTY = /^(nada|ningun[oa]?|ningún|sin\s+pendientes|nothing|none)\s*[.!]?$/iu; // nothing at all
 const LIST_ITEM = /^(\s*)(?:[-*+•]|\d+[.)])\s+(.*)$/;
@@ -1284,7 +1300,7 @@ function structuredAsks(lines) {
       continue;
     }
     if (!cur) continue;
-    if (PENDING_HEAD.test(line)) { close(); continue; }
+    if (pendingHead(line) !== null) { close(); continue; }
     const key = BLOCK_KEY.exec(line);
     if (key) {
       const k = key[1].toLowerCase();
@@ -1321,10 +1337,10 @@ function parseOptions(text) {
 function pendingItems(lines) {
   for (let k = 0; k < lines.length; k++) {
     if (lines[k] === null) continue;
-    const head = PENDING_HEAD.exec(plainLine(lines[k]));
-    if (!head) continue;
+    const head = pendingHead(plainLine(lines[k]));
+    if (head === null) continue;
     const items = [];
-    if (head[1]) items.push(head[1]);
+    if (head) items.push(head);
     for (let j = k + 1; j < lines.length; j++) {
       const raw = lines[j];
       if (raw === null) break;
