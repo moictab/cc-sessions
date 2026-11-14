@@ -1169,20 +1169,20 @@ function describeTool(name, input) {
 /**
  * What a session asks the user to decide, from the text of a message: one entry per question.
  * The rule in the user's global CLAUDE.md has it write, on a line of its own,
- *   [project] Necesito tu decisión: <the question>
+ *   [project] Necesito tu decisión: <the question>       (or "I need your decision: …")
  * numbering them when there are several (D1, D2…, so the user can answer "D2: yes"), and, when what
  * it waits for changes, a block:
- *   Pendiente de ti:
+ *   Pendiente de ti:                                     (or "Waiting on you:")
  *   - D5: <…>
- *   - Bajas de scriptorium: <…>
+ *   - Backups: <…>
  * The block's items, if there is one; else, with the line, the numbered questions in the message
  * if there are two or more; else the line. Found anywhere in the message, and despite the markup
  * the rule asks not to use (quote marks, bold, inline code, a heading or list bullet). Not inside a
  * code block, and not the rule's own example ("[tu-proyecto]", no question, "Pendiente de ti:
  * nada"), so quoting the rule doesn't count.
  */
-const DECISION_LINE = /^\[([^\]\n]{1,80})\]\s*necesito\s+tu\s+decisi[oó]n\s*:\s*(.+)$/iu;
-const PENDING_HEAD = /^pendiente\s+de\s+ti\b\s*(.*)$/iu;
+const DECISION_LINE = /^\[([^\]\n]{1,80})\]\s*(?:necesito\s+tu\s+decisi[oó]n|i\s+need\s+your\s+decision)\s*:\s*(.+)$/iu;
+const PENDING_HEAD = /^(?:pendiente\s+de\s+ti|waiting\s+on\s+you)\b\s*(.*)$/iu;
 
 /**
  * A "Pendiente de ti" heading, and the item on its own line if it has one: "Pendiente de ti" →
@@ -1199,7 +1199,7 @@ function pendingHead(line) {
   if (sep) return /[:：]$/u.test(sep[1]) ? '' : sep[1].trim();
   return /[:：]$/u.test(rest) ? '' : null;
 }
-const PENDING_NONE = /^(nada|ningun[oa]?|ningún|sin\s+pendientes)\b|^[-—–]$/iu;
+const PENDING_NONE = /^(nada|ningun[oa]?|ningún|sin\s+pendientes|nothing|none)\b|^[-—–]$/iu;
 const PENDING_EMPTY = /^(nada|ningun[oa]?|ningún|sin\s+pendientes|nothing|none)\s*[.!]?$/iu; // nothing at all
 const LIST_ITEM = /^(\s*)(?:[-*+•]|\d+[.)])\s+(.*)$/;
 const ASK_LABEL = /^([A-Z]{1,2}\d{1,2})\s*[:.)—–-]\s*(?=\S)/u;
@@ -1394,7 +1394,7 @@ function looseAsks(lines) {
     if (!m) continue;
     const project = m[1].trim().toLowerCase();
     const q = m[2].trim();
-    if (project === 'tu-proyecto' || project === 'proyecto' || !q.replace(/[¿?….\s]/g, '')) continue;
+    if (['tu-proyecto', 'proyecto', 'your-project', 'project'].includes(project) || !q.replace(/[¿?….\s]/g, '')) continue;
     question = q.slice(0, 400);
     break;
   }
