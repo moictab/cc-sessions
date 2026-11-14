@@ -2158,7 +2158,16 @@
     head.append(c.badge, c.name, c.time);
     c.label = el('div', 'ib-label');
     c.text = el('div', 'ib-text');
-    c.li.append(head, c.label, c.text);
+    c.li.append(head, c.label);
+    if (kind === 'decision') {
+      // The rule's format: the question, its summary, what happens without an answer, one button per option.
+      c.q = el('div', 'ib-q');
+      c.fallback = el('div', 'ib-fallback');
+      c.opts = el('div', 'ib-opts');
+      c.li.append(c.q, c.text, c.fallback, c.opts);
+    } else {
+      c.li.appendChild(c.text);
+    }
 
     if (kind === 'decision' || kind === 'done') {
       c.context = el('details', 'ib-context');
@@ -2166,9 +2175,9 @@
       c.ctx = el('div', 'ib-ctx');
       c.context.append(summary, c.ctx);
       c.context.addEventListener('toggle', () => { if (c.context.open) fillContext(c); });
-      // A decision's message is the card the session wrote for you (context, options): open on
-      // its first question (the others share it).
-      c.context.open = kind === 'decision' && first;
+      // Without the session's own explanation, its whole message is the card it wrote for you:
+      // open on its first question (the others share it). With one, it's there if you want it.
+      c.context.open = kind === 'decision' && first && !(ui.sessions.get(id)?.view.asks || []).some((a) => a.key === askKey && a.context);
       c.li.appendChild(c.context);
     }
     if (kind === 'decision') {
@@ -2213,16 +2222,20 @@
     c.name.title = v.cwd;
     c.time.textContent = ago(x.since);
     c.time.title = new Date(x.since).toLocaleString(t.locale);
-    // The question's label (D5, S1…) as a mark of its own, however the session wrote it ("S1.", "D5:", "S1 —").
+    // The question's label (D5, S1…) as a mark of its own, however the session wrote it ("S1.", "D5:", "S1 —"),
+    // and which of the session's questions this is.
     const label = x.ask && x.ask.label;
-    c.label.replaceChildren(t(INBOX_LABEL[x.kind]), ...(label ? [el('span', 'ib-mark', label)] : []));
+    const asks = (x.kind === 'decision' && v.asks) || [];
+    const position = asks.length > 1 ? el('span', 'ib-pos', t('inbox.position', { i: asks.findIndex((a) => a.key === x.ask.key) + 1, n: asks.length })) : null;
+    c.label.replaceChildren(t(INBOX_LABEL[x.kind]), ...(label ? [el('span', 'ib-mark', label)] : []), ...(position ? [position] : []));
     let text = '';
     if (x.kind === 'guard') text = t('inbox.guardText');
     else if (x.kind === 'permission') text = [permissionText(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
     else if (x.kind === 'input') text = [oneLine(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
-    else if (x.kind === 'decision') text = label ? x.ask.text.replace(/^[A-Z]{1,2}\d{1,2}\s*[:.)—–-]\s*/u, '') : x.ask.text;
+    else if (x.kind === 'decision') text = fillDecision(c, x.ask, label);
     else text = oneLine(v.lastReply, 240);
     if (c.text.textContent !== text) c.text.textContent = text;
+    c.text.hidden = !text;
     if (c.context && c.context.open) fillContext(c);
     if (c.ta) {
       // While it works your answer waits in its queue; while it starts it would get lost.
@@ -2230,6 +2243,7 @@
       const can = busy || v.status === 'done' || v.status === 'ready';
       c.ta.disabled = !can;
       c.send.disabled = !can;
+      for (const b of c.opts.children) b.disabled = !can;
       const note = !can ? 'inbox.notNow' : busy ? 'inbox.queued' : 'inbox.hint';
       if (c.noteKey !== note) setInboxNote(c, t(note)); // "Sent." stays until the state changes
       c.noteKey = note;
@@ -2237,12 +2251,50 @@
   }
 
   /**
-   * The last message it got and the whole of its answer, as Markdown: what it's about, without
-   * opening the session. Fetched when it changes (the view only carries the first 2000 characters).
+   * A decision card's parts. In the rule's format: the question, its summary (returned, as the
+   * card's text), what happens without an answer, and a button per option, the recommended one
+   * first in look. Otherwise just the question, as the text.
+   */
+  function fillDecision(c, ask, label) {
+    const question = label ? ask.text.replace(/^[A-Z]{1,2}\d{1,2}\s*[:.)—–-]\s*/u, '') : ask.text;
+    const options = ask.options || [];
+    const structured = !!(ask.summary || options.length || ask.context);
+    c.ask = ask;
+    c.q.textContent = structured ? question : '';
+    c.q.hidden = !structured;
+    c.fallback.textContent = ask.fallback ? t('inbox.ifNoAnswer', { text: ask.fallback }) : '';
+    c.fallback.hidden = !ask.fallback;
+    const key = JSON.stringify(options);
+    if (c.optsKey !== key) {
+      c.optsKey = key;
+      c.opts.replaceChildren(...options.map((o) => {
+        const b = el('button', o.recommended ? 'btn-primary ib-opt' : 'btn-secondary ib-opt', o.label);
+        if (o.recommended) b.appendChild(el('span', 'ib-rec', ` · ${t('inbox.recommended')}`));
+        b.addEventListener('click', () => sendInboxReply(c, o.label));
+        return b;
+      }));
+    }
+    c.opts.hidden = !options.length;
+    c.ta.placeholder = t(options.length ? 'inbox.otherAnswer' : 'inbox.placeholder');
+    return structured ? ask.summary || '' : question;
+  }
+
+  /**
+   * What the card is about, without opening the session: the session's own explanation of a
+   * decision, if it wrote one (the rule's "Contexto"); otherwise the last message it got and the
+   * whole of its answer. As Markdown; the answer is fetched when it changes (the view only
+   * carries the first 2000 characters).
    */
   async function fillContext(c) {
     const v = ui.sessions.get(c.id)?.view;
     if (!v) return;
+    const own = c.ask && c.ask.context;
+    if (own) {
+      if (c.ctxKey === `own\u0000${own}`) return;
+      c.ctxKey = `own\u0000${own}`;
+      c.ctx.replaceChildren(mdBlock(own));
+      return;
+    }
     const key = `${v.lastPrompt}\u0000${v.lastReply}`;
     if (c.ctxKey === key) return;
     c.ctxKey = key;
@@ -2396,17 +2448,20 @@
     c.note.classList.toggle('err', err);
   }
 
-  async function sendInboxReply(c) {
-    const text = c.ta.value.trim();
+  /** `choice`: an option's button; otherwise what's in the answer box. */
+  async function sendInboxReply(c, choice) {
+    const text = (choice || c.ta.value).trim();
     if (!text || c.send.disabled) return;
     c.send.disabled = true;
+    for (const b of c.opts.children) b.disabled = true;
     let r = null;
     try { r = await api.replyTo(c.id, text, c.askKey); } catch { /* reported below */ }
     if (r && r.ok) {
-      c.ta.value = '';
-      setInboxNote(c, t('inbox.sent'));
+      if (!choice) c.ta.value = '';
+      setInboxNote(c, choice ? t('inbox.sentChoice', { choice }) : t('inbox.sent'));
     } else {
       c.send.disabled = false;
+      for (const b of c.opts.children) b.disabled = false;
       setInboxNote(c, (r && r.error) || t('inbox.failed'), true);
     }
   }

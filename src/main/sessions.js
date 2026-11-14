@@ -546,7 +546,20 @@ class SessionManager extends EventEmitter {
   /** What it asks now (from one message): the ones it asked before keep their age. */
   setAsks(s, found, { since = Date.now(), from = Date.now() } = {}) {
     const before = new Map(s.asks.map((a) => [a.key, a]));
-    s.asks = found.map((a) => ({ ...a, since: before.has(a.key) ? before.get(a.key).since : since }));
+    s.asks = found.map((a) => {
+      const was = before.get(a.key);
+      if (!was) return { summary: '', options: [], fallback: '', context: '', ...a, since };
+      // "Pendiente de ti" only names them: what an earlier message explained stays.
+      return {
+        ...a,
+        text: a.summary || a.options?.length ? a.text : was.text,
+        summary: a.summary || was.summary || '',
+        options: a.options && a.options.length ? a.options : was.options || [],
+        fallback: a.fallback || was.fallback || '',
+        context: a.context || was.context || '',
+        since: was.since,
+      };
+    });
     s.asksFrom = from;
     if (!s.waitingSince) s.waitingSince = since; // asking makes it the user's turn, quiet or not
     this.emit('update', this.view(s));
@@ -635,7 +648,8 @@ class SessionManager extends EventEmitter {
     if (!s.pty || !(IDLE.has(s.status) || s.status === 'busy')) return { ok: false, error: this.t('inbox.notNow') };
     // With several questions open, say which one this answers: its label ("D5: …") or its topic.
     const ask = key ? s.asks.find((a) => a.key === key) : null;
-    if (ask && s.asks.length > 1) body = `${askName(ask)}: ${body}`;
+    // With several open, or numbered by the session (D1…), say which one this answers: "D1: Sí".
+    if (ask && (s.asks.length > 1 || ask.label)) body = `${askName(ask)}: ${body}`;
     s.inboxReplies.push({ text: squash(body), key: ask ? ask.key : null });
     if (s.inboxReplies.length > 10) s.inboxReplies.shift();
     if (body.includes('\n')) body = s.bracketedPaste ? `\x1b[200~${body}\x1b[201~` : body.replace(/\s*\n\s*/g, ' ');
@@ -1193,6 +1207,68 @@ function askName(a) {
 
 const squash = (t) => String(t || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
+/**
+ * The rule's full format: after the line, one block per decision, each line in its place:
+ *   D1. <the question>
+ *   Resumen: <about 50 words>
+ *   Opciones: Sí (recomendada) | No
+ *   Si no contestas: <what it does meanwhile>
+ *   Contexto: <about 250 words, plain text; may run over several paragraphs>
+ * The context runs until the next block, a "Pendiente de ti" heading or the end. English keys
+ * (Summary, Options, If you don't answer, Context) work too.
+ */
+const BLOCK_HEAD = /^([A-Z]{1,2}\d{1,2})\s*[.:)—–-]\s*(\S.*)$/u;
+const BLOCK_KEY = /^(resumen|summary|opciones|options|si no contestas|if you don.?t answer|contexto|context)\s*:\s*(.*)$/iu;
+
+function structuredAsks(lines) {
+  const asks = [];
+  let cur = null;
+  let inContext = false;
+  const close = () => {
+    if (cur && (cur.summary || cur.options.length || cur.context)) asks.push(cur);
+    cur = null;
+    inContext = false;
+  };
+  for (const raw of lines) {
+    if (raw === null) { if (inContext && cur) cur.contextLines.push(''); continue; }
+    const line = plainLine(raw);
+    const head = BLOCK_HEAD.exec(line);
+    if (head && !BLOCK_KEY.test(line)) {
+      close();
+      cur = { ...toAsk(`${head[1]}: ${head[2]}`), summary: '', options: [], fallback: '', context: '', contextLines: [] };
+      continue;
+    }
+    if (!cur) continue;
+    if (PENDING_HEAD.test(line)) { close(); continue; }
+    const key = BLOCK_KEY.exec(line);
+    if (key) {
+      const k = key[1].toLowerCase();
+      inContext = false;
+      if (k === 'resumen' || k === 'summary') cur.summary = key[2].trim();
+      else if (k === 'opciones' || k === 'options') cur.options = parseOptions(key[2]);
+      else if (k.startsWith('si no') || k.startsWith('if you')) cur.fallback = key[2].trim();
+      else { inContext = true; if (key[2].trim()) cur.contextLines.push(raw.replace(/^.*?(contexto|context)\s*:\s*/iu, '')); }
+      continue;
+    }
+    if (inContext) cur.contextLines.push(raw);
+    else if (cur.summary && line && !cur.options.length) cur.summary += ` ${line}`; // a summary over two lines
+  }
+  close();
+  return uniqueAsks(asks.map((a) => {
+    const { contextLines, ...rest } = a;
+    return { ...rest, summary: rest.summary.slice(0, 800), fallback: rest.fallback.slice(0, 400), context: contextLines.join('\n').trim().slice(0, 5000) };
+  }));
+}
+
+/** "Sí (recomendada) | No" → [{ label: 'Sí', recommended: true }, { label: 'No', recommended: false }] */
+function parseOptions(text) {
+  return String(text).split('|').map((o) => o.trim()).filter(Boolean).slice(0, 6).map((o) => {
+    const recommended = /\((recomendada|recomendado|recommended)\)/i.test(o);
+    const label = o.replace(/\s*\((recomendada|recomendado|recommended)\)\s*/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+    return { label, recommended };
+  }).filter((o) => o.label);
+}
+
 function findAsks(message) {
   const lines = [];
   let fenced = false;
@@ -1200,6 +1276,8 @@ function findAsks(message) {
     if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; lines.push(null); continue; }
     lines.push(fenced ? null : raw); // null: inside a code block, or a fence
   }
+  const structured = structuredAsks(lines);
+  if (structured.length) return structured;
   let question = '';
   for (const raw of lines) {
     if (raw === null) continue;
@@ -1244,8 +1322,16 @@ function findAsks(message) {
 /** Asks saved by this version, or the one decision an earlier one saved (a block's items, one per line). */
 function cleanAsks(asks, decision) {
   const when = (n) => (Number(n) > 0 ? Number(n) : Date.now());
+  const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
   if (Array.isArray(asks)) {
-    return uniqueAsks(asks.filter((a) => a && typeof a.text === 'string' && a.text).slice(0, 30).map((a) => ({ ...toAsk(a.text), since: when(a.since) })));
+    return uniqueAsks(asks.filter((a) => a && typeof a.text === 'string' && a.text).slice(0, 30).map((a) => ({
+      ...toAsk(a.text),
+      summary: str(a.summary, 800),
+      options: Array.isArray(a.options) ? a.options.filter((o) => o && typeof o.label === 'string' && o.label).slice(0, 6).map((o) => ({ label: o.label.slice(0, 60), recommended: !!o.recommended })) : [],
+      fallback: str(a.fallback, 400),
+      context: str(a.context, 5000),
+      since: when(a.since),
+    })));
   }
   if (decision && typeof decision.text === 'string' && decision.text) {
     return uniqueAsks(decision.text.split('\n').filter((x) => x.trim()).map((x) => ({ ...toAsk(x), since: when(decision.since) })));
