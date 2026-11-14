@@ -1129,7 +1129,8 @@ class SessionManager extends EventEmitter {
       parked: s.parked, // administrator session restored, waiting for you to start it
       elevated: s.elevated,
       waitingSince: s.waitingSince, // your turn since then (null: you've had the last word)
-      asks: s.asks, // what it asked you to decide: [{ key, label, topic, text, since }]
+      // what it asked you to decide, or to do: [{ key, label, topic, text, since, task, … }]
+      asks: s.asks.map((a) => ({ ...a, task: isTask(a) })),
       quietTurn: s.quietTurn, // its last turn wasn't yours: finished without asking for attention
       guard: s.guard.length ? { count: s.guard.length, since: s.guard[0].at } : null, // image-guard windows open
     };
@@ -1219,6 +1220,15 @@ function askName(a) {
 }
 
 const squash = (t) => String(t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * Something for the user to do rather than to decide ("Pendiente de ti: - Run the command above and
+ * reply «hecho»"): not numbered (the rule numbers decisions), no question mark, and no options,
+ * summary or context from a decision block.
+ */
+function isTask(a) {
+  return !a.label && !(a.options && a.options.length) && !a.summary && !a.context && !/[?¿]/.test(a.text);
+}
 
 /**
  * The keys of the questions a prompt of the user's names: by label ("D5: sí") or within a range of

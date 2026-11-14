@@ -99,7 +99,7 @@ const ATTENTION_KEY = {
 };
 
 function attentionKey(view) {
-  if (view.status === 'done' && view.asks && view.asks.length) return 'notify.decision';
+  if (view.status === 'done' && view.asks && view.asks.length) return view.asks.every((a) => a.task) ? 'notify.task' : 'notify.decision';
   return ATTENTION_KEY[view.status] || '';
 }
 

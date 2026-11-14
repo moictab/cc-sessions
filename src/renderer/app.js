@@ -163,8 +163,12 @@
   /** What it asks, in one line: the question, or how many and which ("3 decisions: D5, D6, …"). */
   function asksText(asks) {
     if (asks.length === 1) return oneLine(asks[0].text);
-    return t('status.decisionsText', { n: asks.length, list: asks.map((a) => a.label || a.topic || oneLine(a.text, 30)).join(', ') });
+    const key = asks.every((a) => a.task) ? 'status.tasksText' : 'status.decisionsText';
+    return t(key, { n: asks.length, list: asks.map((a) => a.label || a.topic || oneLine(a.text, 30)).join(', ') });
   }
+
+  /** "Needs your decision", or, when all it asks is for you to do something, "Needs you to do something". */
+  const asksLabel = (asks) => t(asks.length && asks.every((a) => a.task) ? 'status.task' : 'status.decision');
 
   /** An image-guard window waits for your consent (the session itself looks busy meanwhile). */
   function guardOpen(v) {
@@ -184,7 +188,7 @@
     if (v.parked) return { label: t('status.notStarted'), text: t('admin.needsApproval') };
     if (isInterrupted(v)) return { label: t('status.interrupted'), text: t('status.interruptedText') };
     if (guardOpen(v)) return { label: t('status.guard'), text: t('status.guardText') };
-    if (decisionPending(v)) return { label: t('status.decision'), text: asksText(v.asks) };
+    if (decisionPending(v)) return { label: asksLabel(v.asks), text: asksText(v.asks) };
     switch (v.status) {
       case 'busy': return { label: t('status.busy'), text: v.lastPrompt ? t('common.quote', { text: oneLine(v.lastPrompt, 120) }) : '' };
       case 'permission': return { label: t('status.permission'), text: permissionText(v.detail) };
@@ -2227,7 +2231,8 @@
     const label = x.ask && x.ask.label;
     const asks = (x.kind === 'decision' && v.asks) || [];
     const position = asks.length > 1 ? el('span', 'ib-pos', t('inbox.position', { i: asks.findIndex((a) => a.key === x.ask.key) + 1, n: asks.length })) : null;
-    c.label.replaceChildren(t(INBOX_LABEL[x.kind]), ...(label ? [el('span', 'ib-mark', label)] : []), ...(position ? [position] : []));
+    const kindLabel = x.kind === 'decision' ? asksLabel([x.ask]) : t(INBOX_LABEL[x.kind]);
+    c.label.replaceChildren(kindLabel, ...(label ? [el('span', 'ib-mark', label)] : []), ...(position ? [position] : []));
     let text = '';
     if (x.kind === 'guard') text = t('inbox.guardText');
     else if (x.kind === 'permission') text = [permissionText(v.detail), t('inbox.inSession')].filter(Boolean).join(' · ');
@@ -2253,12 +2258,14 @@
   /**
    * A decision card's parts. In the rule's format: the question, its summary (returned, as the
    * card's text), what happens without an answer, and a button per option, the recommended one
-   * first in look. Otherwise just the question, as the text.
+   * first in look. Otherwise just the question, as the text; something for you to do gets a
+   * "Done" button.
    */
   function fillDecision(c, ask, label) {
     const question = label ? ask.text.replace(/^[A-Z]{1,2}\d{1,2}\s*[:.)—–-]\s*/u, '') : ask.text;
-    const options = ask.options || [];
-    const structured = !!(ask.summary || options.length || ask.context);
+    const own = ask.options || [];
+    const options = ask.task ? [{ label: t('inbox.done'), recommended: false }] : own;
+    const structured = !!(ask.summary || own.length || ask.context);
     c.ask = ask;
     c.q.textContent = structured ? question : '';
     c.q.hidden = !structured;
