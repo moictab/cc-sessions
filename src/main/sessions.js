@@ -470,7 +470,9 @@ class SessionManager extends EventEmitter {
         // A request for a session that's working: it reads it along with this step's result,
         // without anything being typed over what it's doing.
         const w = s.wind;
-        if (w && w.state === 'queued') {
+        // Not for an administrator session: its hooks' answers go nowhere (admin-host.js), so it
+        // gets the request typed in when its turn ends.
+        if (w && w.state === 'queued' && !s.admin) {
           w.state = 'delivered';
           this.emit('update', this.view(s));
           return { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: w.text } };

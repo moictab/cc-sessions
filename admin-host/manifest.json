@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "nodePty": "1.1.0",
   "node": {
     "signer": "CN=OpenJS Foundation",
@@ -9,7 +9,7 @@
     {
       "source": "admin-host/admin-host.js",
       "target": "admin-host.js",
-      "sha256": "dfcc77dee533b432019fd55fa0d65e15b07e56384cb3e050c3ceee851fad1ca3"
+      "sha256": "adce5a4427bea3bbce587c034786695395aa393fc461d3ae515a1577aeba0512"
     },
     {
       "source": "node_modules/node-pty/lib/conpty_console_list_agent.js",

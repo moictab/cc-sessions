@@ -36,7 +36,7 @@ function files() {
 const sha256 = (file) => crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, file))).digest('hex');
 
 const manifest = {
-  version: 2, // the protocol between the app and the helper (HELPER_VERSION in src/main/admin.js)
+  version: 3, // the protocol between the app and the helper (HELPER_VERSION in src/main/admin.js)
   nodePty: JSON.parse(fs.readFileSync(path.join(ROOT, PTY, 'package.json'), 'utf8')).version,
   node: { signer: 'CN=OpenJS Foundation', minMajor: 22 },
   files: files().map(([source, target]) => ({ source, target, sha256: sha256(source) })),

@@ -26,7 +26,7 @@ const { spawn } = require('child_process');
 
 const CONNECT_TIMEOUT_MS = 30000; // from the prompt being accepted to the helper calling back
 const INSTALL_DIR = 'C:\\Program Files\\CC Sessions\\admin-host';
-const HELPER_VERSION = 2; // the protocol the installed helper must speak
+const HELPER_VERSION = 3; // the protocol the installed helper must speak
 const CMD = 'C:\\Windows\\System32\\cmd.exe';
 const POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 // Lets the user see the notice before the UAC prompt dims the screen.
@@ -55,10 +55,15 @@ const NODE_STARTUP_VARS = [
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
 ];
 
-/** cmd's command line: /d skips its AutoRun (also in HKCU), then the variables are emptied and node runs. */
+/**
+ * cmd's command line: /d skips its AutoRun (also in HKCU); then Node's variables are emptied, PATH
+ * becomes the system's alone (node.exe's DLL loader would otherwise search the registry's PATH,
+ * which has the user's folders) and no compatibility layer applies; then node runs.
+ */
 function launchLine(dir, port, token) {
   const clear = NODE_STARTUP_VARS.map((v) => `set ${v}=`).join('&& ');
-  return `/d /s /c "${clear}&& "${path.join(dir, 'node.exe')}" "${path.join(dir, 'admin-host.js')}" ${port} ${token}"`;
+  return `/d /s /c "${clear}&& set PATH=C:\\Windows\\System32;C:\\Windows&& set __COMPAT_LAYER=&& ` +
+    `"${path.join(dir, 'node.exe')}" "${path.join(dir, 'admin-host.js')}" ${port} ${token}"`;
 }
 
 class AdminHost {

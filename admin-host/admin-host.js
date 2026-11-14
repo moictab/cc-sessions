@@ -40,7 +40,7 @@ const RUN_DIR = path.join(HERE, 'run');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const TOKEN = /^[0-9a-f]{32}$/;
 const KEY = /^p\d{1,9}$/;
-const NAME = /^[\p{L}\p{N} ._-]{1,80}$/u;
+const NAME = /^(?!-)[\p{L}\p{N} ._-]{1,80}$/u; // not starting with "-", which would read as an option
 const LOCAL_ABS = /^[A-Za-z]:\\/;
 
 // Who may write where the session lives: SYSTEM, Administrators, TrustedInstaller, and CREATOR
@@ -49,6 +49,15 @@ const TRUSTED_SIDS = ['S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649
 const CREATOR_OWNER = 'S-1-3-0';
 // What Claude reads from its working folder, besides the folder itself.
 const SENSITIVE_IN_CWD = ['.claude', '.claude\\settings.json', '.claude\\settings.local.json', '.mcp.json', 'CLAUDE.md', 'CLAUDE.local.md', '.git', '.git\\hooks', '.git\\config'];
+// Claude also loads CLAUDE.md and CLAUDE.local.md from every folder above the working one, up to
+// the drive's root, and looks for .claude there.
+const CLAUDE_ABOVE = [['CLAUDE.md', 'file'], ['CLAUDE.local.md', 'file'], ['.claude', 'dir']];
+// Rights on a folder, for whoever isn't SYSTEM, Administrators or TrustedInstaller:
+const CREATE_FILES = 0x2; // a CLAUDE.md that isn't there could be put there
+const CREATE_FOLDERS = 0x4; // and a .claude
+// delete child, delete, write DACL, take ownership, generic all: what's inside (a protected
+// folder among it) could be renamed away and replaced in the middle of a session.
+const TAKE_OVER = 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x10000000;
 
 const SPAWN_FIELDS = ['t', 'k', 'terminalId', 'sessionId', 'name', 'cwd', 'cols', 'rows', 'hookPort', 'hookToken', 'guardToken'];
 
@@ -150,9 +159,20 @@ function profileEnv(cfg) {
   return env;
 }
 
-/** Claude's environment: the base, the profile, its config folder and how image-guard reaches the app. */
-function claudeEnv(cfg, req) {
+/**
+ * Claude's environment: the base, the profile, its config folder, no updates, and how image-guard
+ * reaches the app. `docs`: the user's Documents folder (from the registry, see inspect()).
+ */
+function claudeEnv(cfg, req, docs) {
   const env = { ...systemEnv(cfg), ...profileEnv(cfg), COLORTERM: 'truecolor' };
+  // PowerShell 7 always puts Documents\PowerShell\Modules (from the registry, not the environment)
+  // first, unless it's already there: so it goes last, after the system's.
+  env.PSModulePath = [
+    `${PROGRAM_FILES}\\PowerShell\\Modules`, `${PROGRAM_FILES}\\PowerShell\\7\\Modules`,
+    `${PROGRAM_FILES}\\WindowsPowerShell\\Modules`, `${cfg.windowsDir}\\System32\\WindowsPowerShell\\v1.0\\Modules`,
+    ...(typeof docs === 'string' && LOCAL_ABS.test(docs) ? [`${docs}\\PowerShell\\Modules`] : []),
+  ].join(';');
+  env.DISABLE_UPDATES = '1'; // it's updated by an administrator, never by itself
   if (cfg.configDir) env.CLAUDE_CONFIG_DIR = cfg.configDir;
   env.CC_SESSIONS_GUARD_URL = `http://127.0.0.1:${req.hookPort}/guard/${req.terminalId}`;
   env.CC_SESSIONS_GUARD_TOKEN = req.guardToken;
@@ -194,36 +214,43 @@ function checkCwd(cfg, cwd) {
 }
 
 /**
- * One PowerShell (5.1, the system's, without a profile, with the closed environment) for what
- * Node can't see: the program's Authenticode signature, and who may write the given paths
- * (owner, and Allow rules with any write-type right). Returns { sig: { status, subject }, acl: [...] }.
+ * One PowerShell (5.1, the system's, without a profile, with the closed environment) for what Node
+ * can't see: the program's Authenticode signature, the user's Documents folder, and for each path
+ * whether it exists, is a folder or a link (reparse point), its owner, who else may write it
+ * (any Allow rule with a write-type right, inherited or not), and the rights others have on the
+ * object itself (`self`, rules that apply to it, not only to what's inside).
  */
 function inspect(cfg, exe, paths) {
-  const input = JSON.stringify({ exe, paths }).replace(/'/g, "''");
+  const input = Buffer.from(JSON.stringify({ exe, paths }), 'utf8').toString('base64'); // no quoting to get wrong
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    `$in = '${input}' | ConvertFrom-Json`,
+    `$in = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${input}')) | ConvertFrom-Json`,
     '$s = Get-AuthenticodeSignature -LiteralPath $in.exe',
     '$subject = if ($s.SignerCertificate) { [string]$s.SignerCertificate.Subject } else { "" }',
-    '$out = @{ sig = @{ status = [string]$s.Status; subject = $subject } }',
+    "$out = @{ sig = @{ status = [string]$s.Status; subject = $subject }; docs = [Environment]::GetFolderPath('MyDocuments') }",
     // write data / add file, append / add subfolder, write EA, delete child, write attributes,
     // delete, write DACL, take ownership, generic all, generic write
     '$write = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x10000000 -bor 0x40000000',
-    `$trusted = @(${TRUSTED_SIDS.map((s) => `'${s}'`).join(', ')})`,
+    `$trusted = @(${TRUSTED_SIDS.map((x) => `'${x}'`).join(', ')})`,
     '$sidType = [System.Security.Principal.SecurityIdentifier]',
+    '$inheritOnly = [System.Security.AccessControl.PropagationFlags]::InheritOnly',
     '$out.acl = @(foreach ($p in $in.paths) {',
     '  try {',
     '    if (-not (Test-Path -LiteralPath $p)) { @{ path = $p; exists = $false }; continue }',
+    '    $item = Get-Item -LiteralPath $p -Force',
+    '    $reparse = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)',
     '    $a = Get-Acl -LiteralPath $p',
     '    $owner = $a.GetOwner($sidType).Value',
-    '    $writers = @()',
+    '    $writers = @(); $self = 0',
     '    foreach ($r in $a.GetAccessRules($true, $true, $sidType)) {',
     "      if ([string]$r.AccessControlType -ne 'Allow') { continue }",
     '      $sid = $r.IdentityReference.Value',
     `      if ($trusted -contains $sid -or $sid -eq '${CREATOR_OWNER}') { continue }`,
-    '      if (([int]$r.FileSystemRights -band $write) -ne 0) { $writers += $sid }',
+    '      $mask = [int]$r.FileSystemRights',
+    '      if (($mask -band $write) -ne 0) { $writers += $sid }',
+    '      if (($r.PropagationFlags -band $inheritOnly) -eq 0) { $self = $self -bor $mask }',
     '    }',
-    '    @{ path = $p; exists = $true; owner = $owner; writers = @($writers | Select-Object -Unique) }',
+    '    @{ path = $p; exists = $true; dir = [bool]$item.PSIsContainer; reparse = $reparse; owner = $owner; writers = @($writers | Select-Object -Unique); self = $self }',
     '  } catch {',
     '    @{ path = $p; exists = $true; error = $_.Exception.Message }', // unreadable: not checked, so not trusted
     '  }',
@@ -232,36 +259,104 @@ function inspect(cfg, exe, paths) {
   ].join('\n');
   const r = spawnSync(sys(cfg, 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'),
     ['-NoProfile', '-NonInteractive', '-NoLogo', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { encoding: 'utf8', windowsHide: true, env: toolEnv(cfg), timeout: 60000, maxBuffer: 4 * 1024 * 1024 });
+    { encoding: 'utf8', windowsHide: true, env: toolEnv(cfg), timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
   if (r.status !== 0) throw new Error(`could not check the signature and permissions (${(r.stderr || '').trim().split(/\r?\n/)[0] || `exit ${r.status}`})`);
   const out = JSON.parse(r.stdout);
   out.acl = [].concat(out.acl || []);
   return out;
 }
 
-/** The paths that must be for administrators only. */
-function guardedPaths(cfg, cwd) {
-  const list = [HERE, cfg.claudeExe, path.dirname(cfg.claudeExe), cwd, ...SENSITIVE_IN_CWD.map((p) => path.join(cwd, p))];
-  for (const p of [cfg.configDir, cfg.profileDir, cfg.tempDir]) if (p) list.push(p);
-  return list;
+/** Every folder above `p`, up to the drive's root (included). */
+function ancestors(p) {
+  const out = [];
+  let cur = path.dirname(p);
+  for (;;) {
+    out.push(cur);
+    const up = path.dirname(cur);
+    if (up === cur) return out;
+    cur = up;
+  }
 }
 
-function checkAll(cfg, cwd) {
-  const out = inspect(cfg, cfg.claudeExe, cfg.checkAcls ? guardedPaths(cfg, cwd) : []);
-  if (out.sig.status !== 'Valid') throw new Error(`claude.exe signature is ${out.sig.status || 'missing'}`);
-  if (!out.sig.subject.startsWith(cfg.claudeSigner)) throw new Error('claude.exe is signed by someone else');
-  // What Claude may read from the working folder need not exist; everything else must.
-  const optional = new Set(SENSITIVE_IN_CWD.map((p) => path.join(cwd, p).toLowerCase()));
-  for (const a of out.acl) {
-    if (!a.exists) {
-      if (!optional.has(String(a.path).toLowerCase())) throw new Error(`missing: ${a.path}`);
+/**
+ * What has to hold before a session starts, as lists of paths:
+ *   must       exist, not a link, owned by SYSTEM/Administrators/TrustedInstaller, nobody else may write
+ *   optional   the same if it exists (what Claude reads in the working folder); .git must be a folder
+ *   above      CLAUDE.md, CLAUDE.local.md and .claude in every folder above the working one: the same
+ *              if they exist; if not, nobody else may create them there
+ *   ancestors  of everything in `must`: owned as above, and nobody else may delete or rename
+ *              what's inside or take the folder over
+ */
+function plan(cfg, cwd) {
+  const must = [...new Set([HERE, cfg.claudeExe, path.dirname(cfg.claudeExe), cwd, ...cfg.path,
+    ...[cfg.configDir, cfg.profileDir, cfg.tempDir].filter(Boolean)])];
+  const optional = SENSITIVE_IN_CWD.map((p) => path.join(cwd, p));
+  const above = [];
+  for (const a of ancestors(cwd)) for (const [name, kind] of CLAUDE_ABOVE) above.push({ path: path.join(a, name), kind, parent: a });
+  const anc = new Set();
+  for (const p of must) for (const a of ancestors(p)) anc.add(a);
+  const all = [...new Set([...must, ...optional, ...above.map((x) => x.path), ...anc])];
+  return { must, optional, above, ancestors: [...anc], all };
+}
+
+/** Checks the inspect() results against the plan: the first thing wrong, or '' if nothing is. */
+function judge(acl, pl) {
+  const info = new Map(acl.map((a) => [String(a.path).toLowerCase(), a]));
+  const get = (p) => info.get(p.toLowerCase()) || { path: p, exists: false };
+  const locked = (i) => {
+    if (i.error) return `could not read the permissions of ${i.path}: ${i.error}`;
+    if (i.reparse) return `${i.path} is a link (reparse point)`;
+    if (!TRUSTED_SIDS.includes(i.owner)) return `${i.path} is owned by ${i.owner}`;
+    const writers = [].concat(i.writers || []);
+    if (writers.length) return `${i.path} can be written by ${writers.join(', ')}`;
+    return '';
+  };
+  for (const p of pl.must) {
+    const i = get(p);
+    if (!i.exists) return `missing: ${p}`;
+    const e = locked(i);
+    if (e) return e;
+  }
+  for (const p of pl.optional) {
+    const i = get(p);
+    if (!i.exists) continue;
+    const e = locked(i);
+    if (e) return e;
+    if (/\\\.git$/i.test(p) && !i.dir) return `${p} is a file: it could send git's config and hooks elsewhere`;
+  }
+  for (const x of pl.above) {
+    const i = get(x.path);
+    if (i.exists) {
+      const e = locked(i);
+      if (e) return e;
       continue;
     }
-    if (a.error) throw new Error(`could not read the permissions of ${a.path}: ${a.error}`);
-    if (!TRUSTED_SIDS.includes(a.owner)) throw new Error(`${a.path} is owned by ${a.owner}`);
-    const writers = [].concat(a.writers || []);
-    if (writers.length) throw new Error(`${a.path} can be written by ${writers.join(', ')}`);
+    const parent = get(x.parent);
+    if (parent.error) return `could not read the permissions of ${x.parent}: ${parent.error}`;
+    const right = x.kind === 'file' ? CREATE_FILES : CREATE_FOLDERS;
+    if (((parent.self | 0) & right) !== 0) return `others may create ${x.path}, which the session would load`;
   }
+  for (const a of pl.ancestors) {
+    const i = get(a);
+    if (!i.exists) return `missing: ${a}`;
+    if (i.error) return `could not read the permissions of ${a}: ${i.error}`;
+    if (!TRUSTED_SIDS.includes(i.owner)) return `${a} is owned by ${i.owner}`;
+    if (((i.self | 0) & TAKE_OVER) !== 0) return `others may delete or rename what's in ${a}`;
+  }
+  return '';
+}
+
+/** The signature, and (unless tests turned it off) the plan. Returns the user's Documents folder. */
+function checkAll(cfg, cwd) {
+  const pl = cfg.checkAcls ? plan(cfg, cwd) : null;
+  const out = inspect(cfg, cfg.claudeExe, pl ? pl.all : []);
+  if (out.sig.status !== 'Valid') throw new Error(`claude.exe signature is ${out.sig.status || 'missing'}`);
+  if (!out.sig.subject.startsWith(cfg.claudeSigner)) throw new Error('claude.exe is signed by someone else');
+  if (pl) {
+    const wrong = judge(out.acl, pl);
+    if (wrong) throw new Error(wrong);
+  }
+  return { docs: out.docs };
 }
 
 // ---------------------------------------------------------------- requests
@@ -278,20 +373,48 @@ function validSpawn(m) {
   if (!TOKEN.test(m.hookToken || '') || !TOKEN.test(m.guardToken || '')) throw new Error('bad token');
 }
 
-/** The settings file for one session: the app's status hooks, written here so nobody else can change it. */
-function writeSettings(cfg, req) {
+/**
+ * What the session is told as it starts (and on every resume, /clear and compaction): written by
+ * the helper, not by the app. Model-facing, so in English. Keep it in step with adminContext() in
+ * src/main/admin.js, which says the same to sessions the app runs itself.
+ */
+function startContext(elevated) {
+  if (!elevated) {
+    return '[CC Sessions] This session is set to run as administrator, but it is running WITHOUT administrator rights ' +
+      '(CC Sessions started it in test mode, without the Windows prompt).';
+  }
+  return '[CC Sessions] This session runs elevated, as Windows administrator: the user turned on "Run as administrator" for it in ' +
+    'CC Sessions and accepted the Windows (UAC) prompt. Commands you run have full administrator rights with no further prompts, ' +
+    'and programs you start run elevated too, so be deliberate with system-wide changes (services, drivers, the registry, ' +
+    'security settings, installing or removing software). Files you create may end up owned by the Administrators group. ' +
+    "Windows doesn't let non-elevated sessions connect to your local message pipe, so their messages (SendMessage) reach you " +
+    'only through Remote Control, while it is on for this session; your messages to them get through as usual. ' +
+    "If you no longer need administrator rights, tell the user: they can turn it off from this session's menu in CC Sessions.";
+}
+
+/**
+ * The settings file for one session, written here so nobody else can change it. The app's status
+ * hooks only report: their answer goes to NUL, so the app, which isn't elevated, can't approve a
+ * tool or slip context in unseen. What the session hears as it starts comes from a file of the
+ * helper's, read with a second SessionStart hook.
+ */
+function writeSettings(cfg, req, elevated = true) {
   const curl = sys(cfg, 'System32\\curl.exe').replace(/\\/g, '/'); // a full path every shell takes
-  const command = `${curl} -s -m 2 -X POST -H "Content-Type: application/json" -H "X-CC-Sessions-Token: ${req.hookToken}" ` +
+  const report = `${curl} -s -m 2 -o NUL -X POST -H "Content-Type: application/json" -H "X-CC-Sessions-Token: ${req.hookToken}" ` +
     `--data-binary "@-" http://127.0.0.1:${req.hookPort}/hook/${req.terminalId} || exit 0`;
-  const hook = (matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command, timeout: 5 }] }];
+  fs.mkdirSync(RUN_DIR, { recursive: true });
+  const startFile = path.join(RUN_DIR, `${req.terminalId}.start.json`);
+  fs.writeFileSync(startFile, JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: startContext(elevated) } }));
+  const tell = `${curl} -s -m 2 "file:///${startFile.replace(/\\/g, '/').replace(/ /g, '%20')}" || exit 0`;
+  const hook = (matcher, extra = []) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: report, timeout: 5 }, ...extra] }];
   const settings = {
     hooks: {
-      SessionStart: hook(), UserPromptSubmit: hook(), PreToolUse: hook('*'), PostToolUse: hook('*'), Notification: hook(), Stop: hook(),
+      SessionStart: hook(null, [{ type: 'command', command: tell, timeout: 5 }]),
+      UserPromptSubmit: hook(), PreToolUse: hook('*'), PostToolUse: hook('*'), Notification: hook(), Stop: hook(),
     },
     disableAgentView: true,
     remoteControlAtStartup: cfg.remoteControl,
   };
-  fs.mkdirSync(RUN_DIR, { recursive: true });
   const file = path.join(RUN_DIR, `${req.terminalId}.json`);
   fs.writeFileSync(file, JSON.stringify(settings, null, 2));
   return file;
@@ -333,7 +456,7 @@ function main() {
 
   sock.on('connect', () => {
     log('start', { elevated, user: os.userInfo().username });
-    send({ t: 'hello', token, pid: process.pid, user: os.userInfo().username, elevated, version: 2 });
+    send({ t: 'hello', token, pid: process.pid, user: os.userInfo().username, elevated, version: 3 });
   });
 
   const spawnSession = (m) => {
@@ -343,10 +466,10 @@ function main() {
     let proc;
     try {
       cwd = checkCwd(cfg, m.cwd);
-      checkAll(cfg, cwd);
-      const settingsFile = writeSettings(cfg, m);
+      const { docs } = checkAll(cfg, cwd);
+      const settingsFile = writeSettings(cfg, m, elevated);
       const args = claudeArgs(cfg, m, cwd, settingsFile);
-      proc = pty.spawn(cfg.claudeExe, args, { name: 'xterm-256color', cols: m.cols, rows: m.rows, cwd, env: claudeEnv(cfg, m), useConpty: true });
+      proc = pty.spawn(cfg.claudeExe, args, { name: 'xterm-256color', cols: m.cols, rows: m.rows, cwd, env: claudeEnv(cfg, m, docs), useConpty: true });
       log('spawned', { k: m.k, terminalId: m.terminalId, sessionId: m.sessionId, cwd, resume: args[0] === '--resume', pid: proc.pid });
     } catch (err) {
       refuse(m.k, err.message, { terminalId: m.terminalId, cwd: cwd || undefined });
@@ -418,4 +541,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { loadConfig, systemEnv, profileEnv, claudeEnv, toolEnv, checkCwd, validSpawn, claudeArgs, writeSettings, inspect, checkAll, guardedPaths };
+module.exports = { loadConfig, systemEnv, profileEnv, claudeEnv, toolEnv, checkCwd, validSpawn, claudeArgs, writeSettings, inspect, checkAll, plan, judge, ancestors, startContext };
