@@ -2471,6 +2471,18 @@
   api.onExternal((list) => renderExternal(list || []));
   api.onMessage((m) => { if (ui.ready) upsertMessage(m); });
   api.onMessagesCleared(() => { ui.messages = []; ui.msgUnread = 0; updateUnread(); renderMessages(); });
+  // Before the UAC prompt for an administrator session: say it's coming (see admin.js, elevate()).
+  api.onAdminNotice((n) => {
+    let box = document.getElementById('admin-notice');
+    if (!n) { if (box) box.remove(); return; }
+    if (!box) {
+      box = el('div', 'admin-notice');
+      box.id = 'admin-notice';
+      box.setAttribute('role', 'alert');
+      document.body.appendChild(box);
+    }
+    box.textContent = n.text;
+  });
 
   setInterval(() => {
     for (const e of ui.sessions.values()) $('.sess-time', e.item).textContent = ago(e.view.statusSince);

@@ -68,6 +68,7 @@ function startHookServer(onEvent, { onMcp, onGuard } = {}) {
       resolve({
         port,
         token,
+        guardToken,
         close: () => server.close(),
         settingsFor: (terminalId) => buildSettings(port, token, terminalId),
         guardEnvFor: onGuard ? (terminalId) => ({

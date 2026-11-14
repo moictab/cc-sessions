@@ -1,0 +1,22 @@
+{
+  "claudeExe": "C:\\Program Files\\ClaudeCode\\elevado\\claude.exe",
+  "claudeSigner": "CN=\"Anthropic, PBC\"",
+  "configDir": "C:\\ProgramData\\admin-session\\claude-config",
+  "profileDir": "C:\\ProgramData\\admin-session\\profile",
+  "tempDir": "C:\\ProgramData\\admin-session\\temp",
+  "allowedRoots": [
+    "C:\\ProgramData\\admin-session\\repo"
+  ],
+  "path": [
+    "C:\\Windows\\System32",
+    "C:\\Windows",
+    "C:\\Windows\\System32\\Wbem",
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
+    "C:\\Windows\\System32\\OpenSSH",
+    "C:\\Program Files\\PowerShell\\7",
+    "C:\\Program Files\\Git\\cmd",
+    "C:\\Program Files\\nodejs"
+  ],
+  "remoteControl": true,
+  "checkAcls": true
+}

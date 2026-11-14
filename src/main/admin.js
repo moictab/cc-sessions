@@ -1,9 +1,14 @@
 'use strict';
 // Administrator sessions. The app itself never runs elevated: Windows only starts an elevated
 // process after its own (UAC) prompt, and never as a child we could attach a terminal to. So the
-// first administrator session of a run starts a helper (admin-host.js) through that prompt; the
-// helper connects back to us and runs every administrator session in its own ConPTY. Later ones,
-// and restarts, reuse it without asking again. It lives as long as the app does.
+// first administrator session of a run starts the helper (admin-host/admin-host.js) through that
+// prompt; the helper connects back to us and runs every administrator session in its own ConPTY.
+// Later ones, and restarts, reuse it without asking again. It lives as long as the app does.
+//
+// The helper is the copy an administrator installed in a folder only administrators can write
+// (INSTALL_DIR, with its own node.exe): never the one in this repo, which the user can change.
+// If it isn't there, administrator sessions don't start. We only tell it which session to open;
+// what runs, with which options and environment, it decides itself (see admin-host.js).
 //
 // spawn() returns an object that behaves like a node-pty IPty (onData, onExit, write, resize,
 // kill, pid), so SessionManager treats both kinds of session the same way. Until the helper
@@ -13,22 +18,61 @@
 // sessions, so a program running as you could, through it, act as administrator.
 
 const net = require('net');
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 const { spawn } = require('child_process');
 
 const CONNECT_TIMEOUT_MS = 30000; // from the prompt being accepted to the helper calling back
+const INSTALL_DIR = 'C:\\Program Files\\CC Sessions\\admin-host';
+const HELPER_VERSION = 2; // the protocol the installed helper must speak
+const CMD = 'C:\\Windows\\System32\\cmd.exe';
+const POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+// Lets the user see the notice before the UAC prompt dims the screen.
+const NOTICE_LEAD_MS = 1500;
+
+/**
+ * Everything Node reads from the environment as it starts. An elevated process doesn't inherit
+ * ours: Windows builds its environment from the registry, HKCU\Environment included, which the
+ * user can write. NODE_OPTIONS=--require … there would run code in the elevated node, a prepared
+ * compile cache could slip code in, and others make it write files as administrator. cmd empties
+ * them all before starting node. Taken from Node 24's documentation and from the names in its
+ * binary; check again when node.exe is updated (install.ps1 does).
+ */
+const NODE_STARTUP_VARS = [
+  'NODE_OPTIONS', 'NODE_PATH', 'NODE_COMPILE_CACHE', 'NODE_COMPILE_CACHE_PORTABLE', 'NODE_DISABLE_COMPILE_CACHE',
+  'NODE_REDIRECT_WARNINGS', 'NODE_V8_COVERAGE', 'NODE_ICU_DATA', 'NODE_EXTRA_CA_CERTS', 'NODE_USE_SYSTEM_CA',
+  'NODE_USE_ENV_PROXY', 'NODE_TLS_REJECT_UNAUTHORIZED', 'NODE_PRESERVE_SYMLINKS', 'NODE_PRESERVE_SYMLINKS_MAIN',
+  'NODE_REPL_EXTERNAL_MODULE', 'NODE_REPL_HISTORY', 'NODE_REPL_HISTORY_SIZE', 'NODE_REPL_MODE', 'NODE_DEBUG',
+  'NODE_DEBUG_NATIVE', 'NODE_DEBUG_ENABLED', 'NODE_INSPECT_RESUME_ON_START', 'NODE_NO_WARNINGS',
+  'NODE_PENDING_DEPRECATION', 'NODE_PENDING_PIPE_INSTANCES', 'NODE_SKIP_PLATFORM_CHECK', 'NODE_TEST_CONTEXT',
+  'NODE_TEST_WORKER_ID', 'NODE_CHANNEL_FD', 'NODE_CHANNEL_SERIALIZATION_MODE', 'NODE_UNIQUE_ID',
+  'NODE_CLUSTER_SCHED_POLICY', 'NODE_DISABLE_COLORS', 'NODE_NO_READLINE', 'NODE_RUN_PACKAGE_JSON_PATH',
+  'NODE_RUN_SCRIPT_NAME', 'NODE_SEA_BLOB', 'NODE_OPENSSL_CONF_NAME',
+  'OPENSSL_CONF', 'OPENSSL_MODULES', 'OPENSSL_ENGINES', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  'UV_THREADPOOL_SIZE', 'UV_USE_IO_URING', 'FORCE_COLOR', 'NO_COLOR', 'TZ',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+];
+
+/** cmd's command line: /d skips its AutoRun (also in HKCU), then the variables are emptied and node runs. */
+function launchLine(dir, port, token) {
+  const clear = NODE_STARTUP_VARS.map((v) => `set ${v}=`).join('&& ');
+  return `/d /s /c "${clear}&& "${path.join(dir, 'node.exe')}" "${path.join(dir, 'admin-host.js')}" ${port} ${token}"`;
+}
 
 class AdminHost {
   /**
-   * `electronPath`: the binary to run the helper with (in Node mode). `noElevate`: tests only,
-   * runs the helper without the prompt (and so without administrator rights).
+   * `hooks`: the hook server ({ port, token, guardToken }), which the helper's sessions report to.
+   * `notice(text | null)`: shows (or takes down) a word for the user before the UAC prompt.
+   * `noElevate`: tests only, runs the helper without the prompt (and so without administrator
+   * rights); only then can `dir` point somewhere other than the installed copy.
    */
-  constructor({ electronPath, noElevate = false } = {}) {
-    this.electronPath = electronPath;
-    this.hostScript = path.join(__dirname, 'admin-host.js');
+  constructor({ hooks, notice = () => {}, noElevate = false, dir = null } = {}) {
+    this.hooks = hooks;
+    this.notice = notice;
     this.noElevate = noElevate;
+    this.dir = noElevate && dir ? dir : INSTALL_DIR;
     this.conn = null; // net.Socket to the helper, once it said hello
     this.info = null; // { pid, user, elevated }
     this.connecting = null;
@@ -36,27 +80,40 @@ class AdminHost {
     this.nextKey = 1;
   }
 
-  /** A pseudo-terminal in the helper, started as soon as the helper is there. */
-  spawn(file, args, opts) {
+  /**
+   * A session in the helper, started as soon as the helper is there. `req`: { terminalId,
+   * sessionId, name, cwd } (which session: the helper decides how it runs); `opts`: { cols, rows }.
+   */
+  spawn(req, opts) {
     const rp = new RemotePty(this, `p${this.nextKey++}`, opts);
     this.ptys.set(rp.key, rp);
-    this.ensure().then(() => {
+    this.ensure(req.name).then(() => {
       if (rp.exited) return;
       rp.sent = true;
-      this.send({ t: 'spawn', k: rp.key, file, args, cwd: opts.cwd, env: opts.env, cols: rp.cols, rows: rp.rows });
+      this.send({
+        t: 'spawn', k: rp.key, terminalId: req.terminalId, sessionId: req.sessionId, name: req.name, cwd: req.cwd,
+        cols: rp.cols, rows: rp.rows, hookPort: this.hooks.port, hookToken: this.hooks.token, guardToken: this.hooks.guardToken,
+      });
     }, (err) => rp.finish({ exitCode: null, error: err.reason || { key: 'admin.failed', vars: { error: err.message } } }));
     return rp;
   }
 
   /** The helper's connection, starting it (and so the prompt) if there isn't one. */
-  ensure() {
+  ensure(name) {
     if (this.conn) return Promise.resolve(this.conn);
-    if (!this.connecting) this.connecting = this.launch().finally(() => { this.connecting = null; });
+    if (!this.connecting) this.connecting = this.launch(name).finally(() => { this.connecting = null; });
     return this.connecting;
   }
 
-  async launch() {
-    const token = crypto.randomBytes(24).toString('hex');
+  /** Whether the installed helper is there (its own node.exe and script). */
+  installed() {
+    return fs.existsSync(path.join(this.dir, 'node.exe')) && fs.existsSync(path.join(this.dir, 'admin-host.js'));
+  }
+
+  async launch(name) {
+    // No falling back on the copy in the repo: without the installed one, no administrator sessions.
+    if (!this.installed()) throw Object.assign(new Error('not installed'), { reason: { key: 'admin.notInstalled', vars: { dir: this.dir } } });
+    const token = crypto.randomBytes(16).toString('hex');
     const server = net.createServer();
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     try {
@@ -86,6 +143,11 @@ class AdminHost {
               reject(Object.assign(new Error('not elevated'), { reason: { key: 'admin.notElevated' } }));
               return;
             }
+            if (msg.version !== HELPER_VERSION) {
+              sock.destroy();
+              reject(Object.assign(new Error('old helper'), { reason: { key: 'admin.oldHelper', vars: { dir: this.dir } } }));
+              return;
+            }
             resolve({ sock, rest: buf.slice(i + 1), info: { pid: msg.pid, user: msg.user, elevated: !!msg.elevated } });
           };
           sock.on('data', onData);
@@ -93,13 +155,17 @@ class AdminHost {
         });
       });
       hello.catch(() => {}); // handled below; keeps an early rejection from being "unhandled"
-      await this.elevate(server.address().port, token);
-      const { sock, rest, info } = await Promise.race([
-        hello,
-        new Promise((_r, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { reason: { key: 'admin.noAnswer' } })), CONNECT_TIMEOUT_MS)),
-      ]);
-      this.attach(sock, rest, info);
-      return sock;
+      try {
+        await this.elevate(server.address().port, token, name);
+        const { sock, rest, info } = await Promise.race([
+          hello,
+          new Promise((_r, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { reason: { key: 'admin.noAnswer' } })), CONNECT_TIMEOUT_MS)),
+        ]);
+        this.attach(sock, rest, info);
+        return sock;
+      } finally {
+        this.notice(null);
+      }
     } finally {
       server.close();
     }
@@ -107,17 +173,22 @@ class AdminHost {
 
   /**
    * Starts the helper through Start-Process -Verb RunAs, which shows the prompt and returns once
-   * it's answered. An elevated process doesn't inherit our environment, so cmd sets the variable
-   * that makes Electron's binary run as plain Node.
+   * it's answered. The prompt will say "Windows Command Processor" (cmd empties Node's variables
+   * first, see launchLine), as it would for anything asking for an elevated cmd: so the app says
+   * beforehand that one is coming, and for which session. A prompt without that notice is a
+   * warning sign.
    */
-  elevate(port, token) {
-    const comspec = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
-    const cmdLine = `/d /s /c "set ELECTRON_RUN_AS_NODE=1&& "${this.electronPath}" "${this.hostScript}" ${port} ${token}"`;
+  async elevate(port, token, name) {
+    if (!this.noElevate) {
+      this.notice({ name: name || '' });
+      await new Promise((r) => setTimeout(r, NOTICE_LEAD_MS));
+    }
+    const cmdLine = launchLine(this.dir, port, token);
     const q = (s) => s.replace(/'/g, "''");
     const script = [
       "$ErrorActionPreference = 'Stop'",
       'try {',
-      `  Start-Process -FilePath '${q(comspec)}' -ArgumentList '${q(cmdLine)}' -WindowStyle Hidden${this.noElevate ? '' : ' -Verb RunAs'}`,
+      `  Start-Process -FilePath '${q(CMD)}' -ArgumentList '${q(cmdLine)}' -WindowStyle Hidden${this.noElevate ? '' : ' -Verb RunAs'}`,
       '  exit 0',
       '} catch {',
       '  $e = $_.Exception; $code = 0',
@@ -128,7 +199,7 @@ class AdminHost {
     ].join('\n');
     return new Promise((resolve, reject) => {
       let stderr = '';
-      const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      const ps = spawn(POWERSHELL, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
       ps.stderr.setEncoding('utf8');
       ps.stderr.on('data', (d) => { stderr += d; });
@@ -271,4 +342,4 @@ function adminContext({ elevated = true, dropped = false } = {}) {
     "If you no longer need administrator rights, tell the user: they can turn it off from this session's menu in CC Sessions.";
 }
 
-module.exports = { AdminHost, adminContext };
+module.exports = { AdminHost, adminContext, launchLine, NODE_STARTUP_VARS, INSTALL_DIR };

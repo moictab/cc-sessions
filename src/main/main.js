@@ -434,8 +434,15 @@ async function boot() {
     onGuard: (terminalId, body) => { if (manager) manager.guardNotice(terminalId, body); },
   });
   // CC_SESSIONS_ADMIN_NO_ELEVATE: tests only, administrator sessions go through the helper
-  // without the Windows prompt (and so without administrator rights).
-  admin = new AdminHost({ electronPath: process.execPath, noElevate: !!process.env.CC_SESSIONS_ADMIN_NO_ELEVATE });
+  // without the Windows prompt (and so without administrator rights); only then may
+  // CC_SESSIONS_ADMIN_HOST_DIR point at a helper other than the installed one.
+  admin = new AdminHost({
+    hooks,
+    noElevate: !!process.env.CC_SESSIONS_ADMIN_NO_ELEVATE,
+    dir: process.env.CC_SESSIONS_ADMIN_HOST_DIR || null,
+    // A word before the UAC prompt, so the user can tell it from one nobody announced.
+    notice: (n) => send('admin:notice', n ? { text: t('admin.uacNotice', { name: n.name || '?' }) } : null),
+  });
   manager = new SessionManager({
     claudePath: resolveClaude(),
     hooks,

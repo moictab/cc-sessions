@@ -173,8 +173,10 @@ class SessionManager extends EventEmitter {
 
   spawn(s) {
     if (this.quitting || !this.sessions.has(s.id)) return;
-    if (!this.claudePath) return this.setStatus(s, 'exited', own('session.noClaude'));
+    const remote = s.admin && !!this.admin;
+    if (!remote && !this.claudePath) return this.setStatus(s, 'exited', own('session.noClaude'));
     if (!fs.existsSync(s.cwd)) return this.setStatus(s, 'exited', own('session.noFolder'));
+    if (remote) return this.spawnAdmin(s);
 
     const settingsPath = path.join(this.settingsDir, s.id + '.json');
     const settings = { ...this.hooks.settingsFor(s.id) };
@@ -213,17 +215,38 @@ class SessionManager extends EventEmitter {
       file = process.env.ComSpec || 'cmd.exe';
     }
 
-    const remote = s.admin && !!this.admin;
     let proc;
     try {
       // Where image-guard's hook tells us about its windows (see guardNotice()).
       const env = { ...sessionEnv(), ...(this.hooks.guardEnvFor ? this.hooks.guardEnvFor(s.id) : {}) };
       const opts = { name: 'xterm-256color', cols: s.cols, rows: s.rows, cwd: s.cwd, env, useConpty: true };
-      proc = remote ? this.admin.spawn(file, args, opts) : pty.spawn(file, args, opts);
+      proc = pty.spawn(file, args, opts);
     } catch (err) {
       return this.setStatus(s, 'exited', own('session.spawnFailed', { error: err.message }));
     }
 
+    this.attachProc(s, proc, false);
+  }
+
+  /**
+   * An administrator session, in the helper (admin.js): we only say which one. Its program, command
+   * line, settings (with our status hooks) and environment are the helper's to decide; it runs
+   * without our MCP server and without per-session plugin overrides.
+   */
+  spawnAdmin(s) {
+    s.claudeSessionId = s.claudeSessionId || crypto.randomUUID();
+    s.loadedPlugins = {};
+    s.spawnSize = { cols: s.cols, rows: s.rows };
+    let proc;
+    try {
+      proc = this.admin.spawn({ terminalId: s.id, sessionId: s.claudeSessionId, name: s.name, cwd: s.cwd }, { cols: s.cols, rows: s.rows });
+    } catch (err) {
+      return this.setStatus(s, 'exited', own('session.spawnFailed', { error: err.message }));
+    }
+    this.attachProc(s, proc, true);
+  }
+
+  attachProc(s, proc, remote) {
     this.clearGuard(s); // the old process's hooks went with it
     s.pty = proc;
     s.pid = proc.pid || null; // an administrator session gets it once the helper has started it

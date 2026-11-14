@@ -58,5 +58,6 @@ contextBridge.exposeInMainWorld('ccsm', {
   onWindowAttended: (cb) => on('window:attended', cb),
   onMessage: (cb) => on('messages:update', cb),
   onMessagesCleared: (cb) => on('messages:cleared', cb),
+  onAdminNotice: (cb) => on('admin:notice', cb),
   clearMessages: () => ipcRenderer.invoke('messages:clear'),
 });
