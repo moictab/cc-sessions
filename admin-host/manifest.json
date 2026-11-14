@@ -9,7 +9,7 @@
     {
       "source": "admin-host/admin-host.js",
       "target": "admin-host.js",
-      "sha256": "adce5a4427bea3bbce587c034786695395aa393fc461d3ae515a1577aeba0512"
+      "sha256": "89b449161fe6e5383e4609e81126bcc900b6169ac4d298b4ab0fdd98a6ae6d2b"
     },
     {
       "source": "node_modules/node-pty/lib/conpty_console_list_agent.js",

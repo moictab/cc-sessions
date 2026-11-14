@@ -55,6 +55,7 @@ const CLAUDE_ABOVE = [['CLAUDE.md', 'file'], ['CLAUDE.local.md', 'file'], ['.cla
 // Rights on a folder, for whoever isn't SYSTEM, Administrators or TrustedInstaller:
 const CREATE_FILES = 0x2; // a CLAUDE.md that isn't there could be put there
 const CREATE_FOLDERS = 0x4; // and a .claude
+const GENERIC_CREATE = 0x40000000 | 0x10000000; // generic write or all include both
 // delete child, delete, write DACL, take ownership, generic all: what's inside (a protected
 // folder among it) could be renamed away and replaced in the middle of a session.
 const TAKE_OVER = 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x10000000;
@@ -333,7 +334,7 @@ function judge(acl, pl) {
     }
     const parent = get(x.parent);
     if (parent.error) return `could not read the permissions of ${x.parent}: ${parent.error}`;
-    const right = x.kind === 'file' ? CREATE_FILES : CREATE_FOLDERS;
+    const right = (x.kind === 'file' ? CREATE_FILES : CREATE_FOLDERS) | GENERIC_CREATE;
     if (((parent.self | 0) & right) !== 0) return `others may create ${x.path}, which the session would load`;
   }
   for (const a of pl.ancestors) {
@@ -356,6 +357,8 @@ function checkAll(cfg, cwd) {
     const wrong = judge(out.acl, pl);
     if (wrong) throw new Error(wrong);
   }
+  // Without it PowerShell 7 would put the user's modules first again (see claudeEnv): no start.
+  if (typeof out.docs !== 'string' || !LOCAL_ABS.test(out.docs)) throw new Error("could not find the user's Documents folder");
   return { docs: out.docs };
 }
 
