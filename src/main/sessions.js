@@ -497,13 +497,13 @@ class SessionManager extends EventEmitter {
         const quiet = !s.turnByUser;
         s.quietTurn = quiet;
         s.turnByUser = true;
-        let found = [];
+        let found = { asks: [], complete: false };
         if (typeof p.last_assistant_message === 'string') {
           s.lastReply = p.last_assistant_message.slice(0, 2000);
           s.fullReply = p.last_assistant_message.slice(0, FULL_REPLY);
-          found = findAsks(p.last_assistant_message);
+          found = readAsks(p.last_assistant_message);
         }
-        if (found.length) this.setAsks(s, found);
+        if (found.asks.length || found.complete) this.setAsks(s, found.asks, { complete: found.complete });
         // A turn whose last message asks nothing keeps what was asked: it may have been answering
         // another session's message, and the user still hasn't said anything. But it may have
         // asked earlier in the turn and gone on with something else, as the rule says to: its
@@ -545,10 +545,16 @@ class SessionManager extends EventEmitter {
     this.emit('persist');
   }
 
-  /** What it asks now (from one message): the ones it asked before keep their age. */
-  setAsks(s, found, { since = Date.now(), from = Date.now() } = {}) {
+  /**
+   * What one message asks. New questions add to the ones still open; a "Pendiente de ti" block
+   * (`complete`) is the whole list of what's open, so what it leaves out is closed. The ones it
+   * asked before keep their age.
+   */
+  setAsks(s, found, { since = Date.now(), from = Date.now(), complete = false } = {}) {
     const before = new Map(s.asks.map((a) => [a.key, a]));
-    s.asks = found.map((a) => {
+    const keys = new Set(found.map((a) => a.key));
+    const kept = complete ? [] : s.asks.filter((a) => !keys.has(a.key));
+    s.asks = kept.concat(found.map((a) => {
       const was = before.get(a.key);
       if (!was) return { summary: '', options: [], fallback: '', context: '', ...a, since };
       // "Pendiente de ti" only names them: what an earlier message explained stays.
@@ -561,17 +567,20 @@ class SessionManager extends EventEmitter {
         context: a.context || was.context || '',
         since: was.since,
       };
-    });
+    })).slice(-30);
     s.asksFrom = from;
-    if (!s.waitingSince) s.waitingSince = since; // asking makes it the user's turn, quiet or not
+    if (!s.waitingSince && s.asks.length) s.waitingSince = since; // asking makes it the user's turn, quiet or not
     this.emit('update', this.view(s));
     this.emit('persist');
   }
 
   /**
    * The user wrote to the session. What does it answer? An answer typed from the inbox answers its
-   * card; a prompt naming some of them ("D5: yes") answers those; anything else answers them all
-   * (if something is still open, the session lists it again, as the rule says to).
+   * card (all of them, if it named none). A prompt that names numbered questions ("D5: yes",
+   * "D4–D6: yes") answers those; one that names none answers the unnumbered ones, which can't be
+   * named. Numbered ones it doesn't name stay: asking the session something else mustn't make them
+   * go away, and the rule has sessions list what's still open only when that changes, not after
+   * every message.
    */
   userAnswered(s, prompt) {
     s.userSpokeAt = Date.now();
@@ -579,10 +588,11 @@ class SessionManager extends EventEmitter {
     const ours = s.inboxReplies.filter((r) => said.includes(r.text));
     s.inboxReplies = s.inboxReplies.filter((r) => !ours.includes(r));
     let answered = null; // keys; null: all of them
-    if (ours.length && ours.every((r) => r.key)) answered = new Set(ours.map((r) => r.key));
-    else {
-      const named = s.asks.filter((a) => a.label && new RegExp(`(^|[^\\p{L}\\p{N}])${a.label}($|[^\\p{L}\\p{N}])`, 'iu').test(prompt));
-      if (named.length) answered = new Set(named.map((a) => a.key));
+    if (ours.length) {
+      if (ours.every((r) => r.key)) answered = new Set(ours.map((r) => r.key));
+    } else {
+      answered = namedAsks(s.asks, prompt);
+      if (!answered.size) for (const a of s.asks) if (!a.label) answered.add(a.key);
     }
     const left = answered ? s.asks.filter((a) => !answered.has(a.key)) : [];
     if (!s.waitingSince && left.length === s.asks.length) return;
@@ -628,9 +638,9 @@ class SessionManager extends EventEmitter {
     if (s.userSpokeAt !== spoke || this.sessions.get(s.id) !== s) return; // the user wrote meanwhile
     for (let k = replies.length - 1; k >= 0; k--) {
       if (s.asks.length && replies[k].at <= s.asksFrom) return; // what we have is as new
-      const found = findAsks(replies[k].text);
-      if (!found.length) continue;
-      this.setAsks(s, found, { since: s.waitingSince || Date.now(), from: replies[k].at });
+      const found = readAsks(replies[k].text);
+      if (!found.asks.length && !found.complete) continue;
+      this.setAsks(s, found.asks, { since: s.waitingSince || Date.now(), from: replies[k].at, complete: found.complete });
       return;
     }
   }
@@ -1173,6 +1183,7 @@ function describeTool(name, input) {
 const DECISION_LINE = /^\[([^\]\n]{1,80})\]\s*necesito\s+tu\s+decisi[oó]n\s*:\s*(.+)$/iu;
 const PENDING_HEAD = /^pendiente\s+de\s+ti\s*[:：.]?\s*(.*)$/iu;
 const PENDING_NONE = /^(nada|ningun[oa]?|ningún|sin\s+pendientes)\b|^[-—–]$/iu;
+const PENDING_EMPTY = /^(nada|ningun[oa]?|ningún|sin\s+pendientes|nothing|none)\s*[.!]?$/iu; // nothing at all
 const LIST_ITEM = /^(\s*)(?:[-*+•]|\d+[.)])\s+(.*)$/;
 const ASK_LABEL = /^([A-Z]{1,2}\d{1,2})\s*[:.)—–-]\s*(?=\S)/u;
 
@@ -1208,6 +1219,28 @@ function askName(a) {
 }
 
 const squash = (t) => String(t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * The keys of the questions a prompt of the user's names: by label ("D5: sí") or within a range of
+ * labels ("D4–D6: sí", "D4-6", "D4 a D6").
+ */
+function namedAsks(asks, prompt) {
+  const text = String(prompt || '');
+  const keys = new Set();
+  for (const a of asks) {
+    if (a.label && new RegExp(`(^|[^\\p{L}\\p{N}])${a.label}($|[^\\p{L}\\p{N}])`, 'iu').test(text)) keys.add(a.key);
+  }
+  const RANGE = /(?:^|[^\p{L}\p{N}])([A-Z]{1,2})(\d{1,2})\s*(?:[-–—]|a|to|hasta)\s*(?:\1)?(\d{1,2})(?=$|[^\p{L}\p{N}])/giu;
+  for (const m of text.matchAll(RANGE)) {
+    const lo = Math.min(+m[2], +m[3]);
+    const hi = Math.max(+m[2], +m[3]);
+    for (const a of asks) {
+      const l = /^([A-Z]{1,2})(\d{1,2})$/iu.exec(a.label || '');
+      if (l && l[1].toUpperCase() === m[1].toUpperCase() && +l[2] >= lo && +l[2] <= hi) keys.add(a.key);
+    }
+  }
+  return keys;
+}
 
 /**
  * The rule's full format: after the line, one block per decision, each line in its place:
@@ -1271,26 +1304,11 @@ function parseOptions(text) {
   }).filter((o) => o.label);
 }
 
-function findAsks(message) {
-  const lines = [];
-  let fenced = false;
-  for (const raw of String(message || '').split(/\r?\n/)) {
-    if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; lines.push(null); continue; }
-    lines.push(fenced ? null : raw); // null: inside a code block, or a fence
-  }
-  const structured = structuredAsks(lines);
-  if (structured.length) return structured;
-  let question = '';
-  for (const raw of lines) {
-    if (raw === null) continue;
-    const m = DECISION_LINE.exec(plainLine(raw));
-    if (!m) continue;
-    const project = m[1].trim().toLowerCase();
-    const q = m[2].trim();
-    if (project === 'tu-proyecto' || project === 'proyecto' || !q.replace(/[¿?….\s]/g, '')) continue;
-    question = q.slice(0, 400);
-    break;
-  }
+/**
+ * The items of the message's "Pendiente de ti" block: null if it has none, [] if it says nothing
+ * is pending ("Pendiente de ti: nada", and nothing more).
+ */
+function pendingItems(lines) {
   for (let k = 0; k < lines.length; k++) {
     if (lines[k] === null) continue;
     const head = PENDING_HEAD.exec(plainLine(lines[k]));
@@ -1307,8 +1325,52 @@ function findAsks(message) {
       else if (/^\s{2,}\S/.test(raw) && items.length) items[items.length - 1] += ' ' + plainLine(raw);
       else break;
     }
-    const real = items.map((x) => x.trim()).filter((x) => x && !PENDING_NONE.test(x));
-    if (real.length) return uniqueAsks(real.map(toAsk));
+    const all = items.map((x) => plainLine(x)).filter(Boolean);
+    const real = all.filter((x) => !PENDING_NONE.test(x));
+    if (real.length) return real;
+    if (all.length && all.every((x) => PENDING_EMPTY.test(x))) return [];
+  }
+  return null;
+}
+
+/**
+ * What a message asks: { asks, complete }. `complete`: the message says what's open, all of it
+ * (it has a "Pendiente de ti" block, whose items join the decision blocks in the same message), so
+ * whatever was asked before and isn't in `asks` is closed. Otherwise its questions add to those.
+ */
+function readAsks(message) {
+  const lines = [];
+  let fenced = false;
+  for (const raw of String(message || '').split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; lines.push(null); continue; }
+    lines.push(fenced ? null : raw); // null: inside a code block, or a fence
+  }
+  const structured = structuredAsks(lines);
+  const pending = pendingItems(lines);
+  if (pending) {
+    const keys = new Set(structured.map((a) => a.key));
+    return { asks: structured.concat(uniqueAsks(pending.map(toAsk)).filter((a) => !keys.has(a.key))), complete: true };
+  }
+  if (structured.length) return { asks: structured, complete: false };
+  return { asks: looseAsks(lines), complete: false };
+}
+
+function findAsks(message) {
+  return readAsks(message).asks;
+}
+
+/** Without blocks: the decision line, or the numbered questions that come with it. */
+function looseAsks(lines) {
+  let question = '';
+  for (const raw of lines) {
+    if (raw === null) continue;
+    const m = DECISION_LINE.exec(plainLine(raw));
+    if (!m) continue;
+    const project = m[1].trim().toLowerCase();
+    const q = m[2].trim();
+    if (project === 'tu-proyecto' || project === 'proyecto' || !q.replace(/[¿?….\s]/g, '')) continue;
+    question = q.slice(0, 400);
+    break;
   }
   if (!question) return [];
   const numbered = [];
