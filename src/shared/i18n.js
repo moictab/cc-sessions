@@ -93,7 +93,7 @@
       'winddown.state.delivered': 'stopping…',
       'winddown.state.done': 'ready',
       'winddown.state.closed': 'not running',
-      'winddown.note': '[CC Sessions] The user is about to restart CC Sessions, which closes this session’s process (the conversation is resumed afterwards). Stop any background tasks you have running (background commands, monitors, scheduled reminders, subagents) and don’t start new ones until you’re told otherwise. If you’re in the middle of something, leave it at a point you can pick up from. Then reply in one line: what you stopped and what will need relaunching, or “nothing running”.',
+      'winddown.note': '[CC Sessions] The user is about to restart CC Sessions, which closes this session’s process (the conversation is resumed afterwards). Stop any background tasks you have running (background commands, monitors, Claude Code’s scheduled tasks, subagents; leave the reminders you set with CC Sessions’ schedule_reminder, which survive the restart) and don’t start new ones until you’re told otherwise. If you’re in the middle of something, leave it at a point you can pick up from. Then reply in one line: what you stopped and what will need relaunching, or “nothing running”.',
       'winddown.afterNote': '[CC Sessions] CC Sessions has restarted. Before the restart you were asked to stop your background tasks: relaunch the ones that are still needed and carry on with any unfinished work.',
       'winddown.cancelNote': '[CC Sessions] The restart of CC Sessions was called off: you can relaunch what you stopped and carry on.',
 
@@ -136,11 +136,16 @@
       'help.inbox': 'Waiting for you: decisions, permissions, questions',
       'session.messageFrom': 'Message from {name}: {body}',
       'session.anotherSession': 'another session',
+      'session.reminder': 'Reminder {ids}: {text}',
+      // typed into a session when reminders it set for itself are due (their text goes as hook context)
+      'reminder.prompt': '[CC Sessions] Reminder {ids}',
+      'reminder.promptMany': '[CC Sessions] Reminders {ids}',
+      'reminder.markTitle': 'Reminders it set for itself',
       'session.closedPeer': 'session already closed',
       'session.invalidFolder': 'Invalid folder',
 
       // ---- notes typed into a session after a restart (they show in the conversation)
-      'restartNote.lost': 'background commands, monitors, running subagents and scheduled reminders',
+      'restartNote.lost': 'background commands, monitors, running subagents and Claude Code’s scheduled tasks (CC Sessions’ schedule_reminder reminders are kept)',
       'restartNote.why': ' to {change}',
       'restartNote.bySession': '[CC Sessions] Session restarted{why}, as you asked. The restart closed any background tasks ' +
         'you had running ({lost}): relaunch the ones that are still needed and carry on with what you were doing.',
@@ -465,7 +470,7 @@
       'winddown.state.delivered': 'parando…',
       'winddown.state.done': 'lista',
       'winddown.state.closed': 'no está en marcha',
-      'winddown.note': '[CC Sessions] El usuario va a reiniciar CC Sessions, lo que cierra el proceso de esta sesión (la conversación se retoma después). Para las tareas en segundo plano que tengas en marcha (comandos en segundo plano, monitores, recordatorios programados, subagentes) y no empieces otras hasta nuevo aviso. Si estás a mitad de algo, déjalo en un punto desde el que puedas retomarlo. Después responde en una línea: qué has parado y qué habrá que relanzar, o «nada en marcha».',
+      'winddown.note': '[CC Sessions] El usuario va a reiniciar CC Sessions, lo que cierra el proceso de esta sesión (la conversación se retoma después). Para las tareas en segundo plano que tengas en marcha (comandos en segundo plano, monitores, tareas programadas de Claude Code, subagentes; deja los recordatorios que programaste con schedule_reminder de CC Sessions, que sobreviven al reinicio) y no empieces otras hasta nuevo aviso. Si estás a mitad de algo, déjalo en un punto desde el que puedas retomarlo. Después responde en una línea: qué has parado y qué habrá que relanzar, o «nada en marcha».',
       'winddown.afterNote': '[CC Sessions] CC Sessions se ha reiniciado. Antes del reinicio se te pidió parar tus tareas en segundo plano: relanza las que sigan haciendo falta y continúa con lo que tuvieras a medias.',
       'winddown.cancelNote': '[CC Sessions] Se ha cancelado el reinicio de CC Sessions: puedes relanzar lo que paraste y continuar.',
 
@@ -508,11 +513,15 @@
       'help.inbox': 'Esperando tu respuesta: decisiones, permisos, preguntas',
       'session.messageFrom': 'Mensaje de {name}: {body}',
       'session.anotherSession': 'otra sesión',
+      'session.reminder': 'Recordatorio {ids}: {text}',
+      'reminder.prompt': '[CC Sessions] Recordatorio {ids}',
+      'reminder.promptMany': '[CC Sessions] Recordatorios {ids}',
+      'reminder.markTitle': 'Recordatorios que se ha programado',
       'session.closedPeer': 'sesión ya cerrada',
       'session.invalidFolder': 'Carpeta no válida',
 
       // ---- notes typed into a session after a restart (they show in the conversation)
-      'restartNote.lost': 'comandos en segundo plano, monitores, subagentes en curso y recordatorios programados',
+      'restartNote.lost': 'comandos en segundo plano, monitores, subagentes en curso y tareas programadas de Claude Code (los recordatorios de schedule_reminder de CC Sessions se conservan)',
       'restartNote.why': ' para {change}',
       'restartNote.bySession': '[CC Sessions] Sesión reiniciada{why}, como pediste. El reinicio cerró las tareas en segundo plano ' +
         'que tuvieras en marcha ({lost}): relanza las que sigan haciendo falta y continúa con lo que estabas haciendo.',

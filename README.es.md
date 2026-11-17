@@ -18,6 +18,7 @@ Con varios agentes de Claude Code a la vez, lo difícil es saber cuál te espera
 - **Pensada para muchas sesiones.** Vista individual o en cuadrícula, grupos, insignias de color, buscador rápido (`Ctrl+Shift+K`), «ir a la siguiente que me necesita» (`Ctrl+Shift+J`) y las sesiones que tienes abiertas en otras terminales.
 - **Mensajes entre sesiones.** Un panel muestra lo que tus agentes se dicen con `SendMessage` y si ya lo han leído.
 - **Reinicios seguros.** Antes de reiniciar la app, se pide a cada sesión que pare sus tareas en segundo plano y deje su trabajo listo para retomarlo. Al volver, a cada una se le dice que continúe.
+- **Recordatorios que sobreviven a los reinicios.** Una sesión puede programarse un recordatorio con la herramienta `schedule_reminder` de la app. La app lo guarda aunque se reinicien la app o la sesión, y se lo entrega cuando está libre, marcado como atrasado si a esa hora la app estaba cerrada.
 - **Plugins por sesión.** Activa un plugin como Playwright en una sola sesión. La propia sesión también puede pedirlo, con el servidor MCP que trae la app.
 - **Sesiones de administrador, con cuidado.** Las sesiones elevadas pasan por un pequeño auxiliar instalado en una carpeta solo para administradores, comprobado fichero a fichero contra un manifiesto SHA-256. La app nunca eleva código que tu usuario pueda cambiar.
 - **¿No estás delante del PC?** Si hay sesiones que llevan demasiado esperando mientras estás fuera, la app puede ejecutar un comando de tu elección (por ejemplo, uno que te mande un mensaje al móvil).
@@ -77,7 +78,7 @@ Si tienes el servidor MCP cc-sessions, plantea la decisión con su herramienta a
 - **Estado:** cada sesión se lanza con su propio fichero `--settings`, que añade hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`). Los hooks informan a un servidor HTTP en `127.0.0.1`, con puerto aleatorio y un token por arranque.
 - **Respaldo:** el registro de sesiones de Claude Code (`~/.claude/sessions`) corrige los hooks perdidos y muestra las sesiones abiertas fuera de la app.
 - **Bandeja:** un pequeño analizador lee las tarjetas de decisión del último mensaje de cada turno. Para los turnos que terminaron con la app cerrada, las busca en la transcripción.
-- **Servidor MCP:** el mismo servidor local da a las sesiones herramientas propias de la app: `ask_user` y `resolve_decision` para la bandeja, y `set_plugin`.
+- **Servidor MCP:** el mismo servidor local da a las sesiones herramientas propias de la app: `ask_user` y `resolve_decision` para la bandeja, `schedule_reminder` (con `list_reminders` y `cancel_reminder`) y `set_plugin`.
 
 La [guía completa](docs/guia.md) explica cada función, todos los atajos y cómo funciona por dentro, incluido el modelo de seguridad del auxiliar de administrador.
 

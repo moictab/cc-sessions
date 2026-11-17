@@ -1,8 +1,9 @@
 'use strict';
 // A small MCP server that CC Sessions offers to each of its sessions (Streamable HTTP, plain
 // JSON responses, no streaming). Its tools let a session ask the app for things only the app
-// can do: putting a decision in the user's inbox (ask_user, resolve_decision), or switching a
-// plugin on just for itself, which needs a restart (set_plugin).
+// can do: putting a decision in the user's inbox (ask_user, resolve_decision), reminders that
+// survive restarts (schedule_reminder, list_reminders, cancel_reminder), or switching a plugin on
+// just for itself, which needs a restart (set_plugin).
 // Transport-agnostic: the HTTP side lives in hook-server.js.
 // Everything here is read by the model, not by the user, so it is always in English,
 // whatever the interface language.
@@ -10,6 +11,7 @@
 const plugins = require('./plugins');
 const i18n = require('../shared/i18n');
 const { lostOnRestart } = require('./restart-note');
+const reminders = require('./reminders');
 
 const LOST_ON_RESTART = lostOnRestart(i18n.create('en'));
 
@@ -19,7 +21,8 @@ const DEFAULT_PROTOCOL = '2025-06-18';
 const INSTRUCTIONS =
   'CC Sessions is the desktop app hosting this Claude Code session. With ask_user you put a decision in the ' +
   "user's inbox, as a card with one button per option; it returns at once, and the answer comes later as a prompt " +
-  'such as "D4: Yes". resolve_decision takes one of yours off the inbox when it is no longer needed. With set_plugin ' +
+  'such as "D4: Yes". resolve_decision takes one of yours off the inbox when it is no longer needed. schedule_reminder ' +
+  'sets a reminder for this session that survives restarts of the app and of the session. With set_plugin ' +
   'you can turn a plugin (for example Playwright, an isolated browser) on or off for this session only; applying it ' +
   'requires restarting the session when the turn ends, and the restart closes background tasks.';
 
@@ -94,6 +97,57 @@ const RESOLVE_DECISION = {
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 };
 
+const SCHEDULE_REMINDER = {
+  name: 'schedule_reminder',
+  title: 'Set a reminder for this session',
+  description: [
+    'Sets a reminder for this session only. CC Sessions keeps it with the session, so it survives restarts of the app and',
+    "of the session, /clear and compaction (Claude Code's own scheduled tasks, such as CronCreate or /loop, do not).",
+    'When it is due and the session is idle, CC Sessions types a fixed line naming it (like "[CC Sessions] Reminder R3")',
+    'and your text comes with it as hook context; if the session is busy or waiting on the user, it comes once it is free,',
+    'and if the app was closed at that time, as soon as it is back, marked as late.',
+    'Write the text for your future self, who may not remember this conversation: what to do or check, and why.',
+    'A reminder never reaches the user and is never an answer from them. If you will need them, raise a decision then.',
+    `At most ${reminders.MAX_PENDING} pending per session. Give either at or in_minutes.`,
+  ].join(' '),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      text: { type: 'string', description: `What to remind yourself of (up to ${reminders.MAX_TEXT} characters).` },
+      at: {
+        type: 'string',
+        description: 'When: a date and time like "2026-11-18T09:00", in local time, or with an offset ("…+01:00", "…Z"). ' +
+          'Up to 366 days ahead.',
+      },
+      in_minutes: { type: 'number', description: 'Or: in how many minutes (1 to 527040).' },
+    },
+    required: ['text'],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+};
+
+const LIST_REMINDERS = {
+  name: 'list_reminders',
+  title: "This session's pending reminders",
+  description: 'Lists the reminders this session has pending (set with schedule_reminder): label, when, and the start of their text.',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+};
+
+const CANCEL_REMINDER = {
+  name: 'cancel_reminder',
+  title: 'Cancel a reminder',
+  description: 'Cancels one of the reminders this session has pending.',
+  inputSchema: {
+    type: 'object',
+    properties: { id: { type: 'string', description: 'Its label, like "R3".' } },
+    required: ['id'],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+};
+
 /**
  * ask_user's arguments, checked against the schema (the model may still send anything): { value }
  * or { error } listing everything to fix, so that one more call gets it right.
@@ -131,6 +185,8 @@ function checkDecision(a) {
 }
 
 const openList = (open) => (open.length ? open.join(', ') : 'none');
+const pendingList = (list) => (list.length ? list.map(reminders.reminderLine).join('; ') : 'none');
+const nowLine = () => `now it is ${reminders.localTime(Date.now())} (local time, ${reminders.utcOffset(Date.now())})`;
 
 function createMcpHandler({ manager, version }) {
   function describeSetPlugin(id) {
@@ -148,8 +204,10 @@ function createMcpHandler({ manager, version }) {
 
   function tools(id) {
     const keys = manager.pluginState(id).plugins.map((p) => p.key);
-    if (!keys.length) return [ASK_USER, RESOLVE_DECISION];
-    return [ASK_USER, RESOLVE_DECISION, {
+    // Reminders only for sessions that don't run as administrator (those don't get this server anyway).
+    const own = manager.get(id).admin ? [] : [SCHEDULE_REMINDER, LIST_REMINDERS, CANCEL_REMINDER];
+    if (!keys.length) return [ASK_USER, RESOLVE_DECISION, ...own];
+    return [ASK_USER, RESOLVE_DECISION, ...own, {
       name: 'set_plugin',
       title: 'Turn a plugin on or off in this session',
       description: describeSetPlugin(id),
@@ -208,6 +266,32 @@ function createMcpHandler({ manager, version }) {
     return toolText(`${label.toUpperCase()} is off the user's inbox. Still open: ${openList(r.open)}.`);
   }
 
+  function callSchedule(id, args) {
+    const c = reminders.checkReminder(args);
+    if (c.error) return toolError(c.error);
+    const r = manager.scheduleReminder(id, c.value);
+    if (!r.ok) return toolError(r.error);
+    const at = c.value.at;
+    return toolText(`Scheduled: ${r.id} for ${reminders.localTime(at)} (local time, ${reminders.utcOffset(at)}; now it is ${reminders.localTime(Date.now())}). ` +
+      `When it is due and this session is idle, CC Sessions will type a line naming ${r.id} and attach your text to it. ` +
+      `It survives restarts. Pending reminders in this session: ${pendingList(r.pending)}.`);
+  }
+
+  function callListReminders(id) {
+    const r = manager.listReminders(id);
+    if (!r.ok) return toolError(r.error);
+    return toolText(`Pending reminders in this session (${nowLine()}): ${pendingList(r.pending)}.`);
+  }
+
+  function callCancelReminder(id, args) {
+    const rid = typeof args.id === 'string' ? args.id.trim().toUpperCase() : '';
+    if (!rid) return toolError('Invalid parameters: id (like "R3") is required.');
+    const r = manager.cancelReminder(id, rid);
+    if (r.error) return toolError(r.error);
+    if (!r.ok) return toolError(`There is no pending reminder ${rid} in this session. Pending: ${pendingList(r.pending)}.`);
+    return toolText(`${rid} is cancelled. Still pending: ${pendingList(r.pending)}.`);
+  }
+
   /** Handles one JSON-RPC message. Returns the response, or null for notifications. */
   return function handle(id, msg) {
     if (!msg || typeof msg !== 'object' || msg.jsonrpc !== '2.0') return rpcError(null, -32600, 'Invalid Request');
@@ -236,6 +320,12 @@ function createMcpHandler({ manager, version }) {
           if (name === 'ask_user') return rpcResult(msg.id, callAskUser(id, args));
           if (name === 'resolve_decision') return rpcResult(msg.id, callResolve(id, args));
           if (name === 'set_plugin') return rpcResult(msg.id, callSetPlugin(id, args));
+          if (['schedule_reminder', 'list_reminders', 'cancel_reminder'].includes(name) && manager.get(id).admin) {
+            return rpcResult(msg.id, toolError('Reminders are not available in administrator sessions.'));
+          }
+          if (name === 'schedule_reminder') return rpcResult(msg.id, callSchedule(id, args));
+          if (name === 'list_reminders') return rpcResult(msg.id, callListReminders(id));
+          if (name === 'cancel_reminder') return rpcResult(msg.id, callCancelReminder(id, args));
           return rpcError(msg.id, -32602, `Unknown tool: ${name}`);
         }
         default:

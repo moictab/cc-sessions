@@ -79,6 +79,7 @@
     tbDot: $('#tb-dot'),
     tbMono: $('#tb-mono'),
     tbAdmin: $('#tb-admin'),
+    tbRem: $('#tb-rem'),
     windDot: $('#wind-dot'),
     tbName: $('#tb-name'),
     tbPath: $('#tb-path'),
@@ -345,7 +346,7 @@
     //         ● status · detail
     //         path (only when the folder isn't named like the session)
     const row = el('div', 'sess-row');
-    row.append(el('span', 'sess-name'), adminMark(), el('span', 'sess-time'), el('kbd', 'sess-key'));
+    row.append(el('span', 'sess-name'), adminMark(), reminderMark(), el('span', 'sess-time'), el('kbd', 'sess-key'));
     const status = el('div', 'sess-status');
     status.append(el('span', 'dot'), el('span', 'sess-detail'));
     li.append(el('span', 'mono'), row, status, el('div', 'sess-path'));
@@ -387,7 +388,7 @@
     pane.dataset.id = id;
 
     const head = el('div', 'pane-head');
-    head.append(el('span', 'dot'), el('span', 'mono'), el('span', 'pane-name'), adminMark(), el('span', 'pane-state'));
+    head.append(el('span', 'dot'), el('span', 'mono'), el('span', 'pane-name'), adminMark(), reminderMark(), el('span', 'pane-state'));
     head.addEventListener('click', () => setActive(id));
 
     const banner = el('div', 'pane-banner');
@@ -450,6 +451,8 @@
     $('.sess-name', e.item).textContent = v.name;
     $('.admin-mark', e.item).hidden = !v.admin;
     $('.pane-head .admin-mark', e.pane).hidden = !v.admin;
+    setReminderMark($('.rem-mark', e.item), v);
+    setReminderMark($('.pane-head .rem-mark', e.pane), v);
     $('.sess-time', e.item).textContent = ago(v.statusSince);
     const path = $('.sess-path', e.item);
     path.textContent = shortPath(v.cwd);
@@ -482,6 +485,7 @@
     dom.tbDot.classList.toggle('interrupted', isInterrupted(v));
     setBadge(dom.tbMono, v);
     dom.tbAdmin.hidden = !v.admin;
+    setReminderMark(dom.tbRem, v);
     if (!dom.tbName.querySelector('input')) dom.tbName.textContent = v.name;
     dom.tbPath.textContent = shortPath(v.cwd);
     dom.tbPath.title = t('topbar.openPath', { path: v.cwd });
@@ -561,6 +565,24 @@
     s.title = t('admin.badgeTitle');
     s.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.75 3 3.6v3.9c0 3.1 2.1 5.3 5 6.25 2.9-.95 5-3.15 5-6.25V3.6z"/></svg>';
     return s;
+  }
+
+  /** A clock next to the name of a session with reminders it set for itself (schedule_reminder). */
+  function reminderMark() {
+    const s = el('span', 'rem-mark');
+    s.hidden = true;
+    s.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8.5" r="5.25"/><path d="M8 5.75V8.5l1.9 1.3M3.4 2.6 2 4M12.6 2.6 14 4"/></svg>';
+    return s;
+  }
+
+  /** Its title lists them: "R3 · 18/11/26, 9:00 · the text". */
+  function setReminderMark(node, v) {
+    if (!node) return;
+    const list = Array.isArray(v.reminders) ? v.reminders : [];
+    node.hidden = !list.length;
+    const when = (ms) => new Date(ms).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+    const line = (r) => `${r.id} · ${when(r.at)} · ${r.text.replace(/\s+/g, ' ').slice(0, 90)}`;
+    node.title = list.length ? [t('reminder.markTitle'), ...list.map(line)].join('\n') : '';
   }
 
   function badge(view) {

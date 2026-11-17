@@ -18,6 +18,7 @@ When you run several Claude Code agents at once, most of the work is noticing wh
 - **Built for many sessions.** Single or grid view, groups, colored badges, a quick switcher (`Ctrl+Shift+K`), "go to the next one that needs me" (`Ctrl+Shift+J`), and the sessions you have open in other terminals.
 - **Messages between sessions.** A panel shows what your agents tell each other with `SendMessage`, and whether it has been read.
 - **Safe restarts.** Before the app restarts, every session is asked to stop its background tasks and leave its work resumable. When they're back, each one is told to carry on.
+- **Reminders that survive restarts.** A session can set itself a reminder with the app's `schedule_reminder` tool. The app keeps it across restarts of the app and of the session, and hands it over when the session is free, marked as late if the app was closed at the time.
 - **Per-session plugins.** Turn a plugin like Playwright on in one session only. A session can also ask for it itself, through the app's built-in MCP server.
 - **Administrator sessions, done carefully.** Elevated sessions run through a small helper installed in an admin-only folder, checked file by file against a SHA-256 manifest. The app never elevates code your user account could change.
 - **Away from the PC?** If sessions wait too long while you're away, the app can run a command of your choice (for example, one that sends a message to your phone).
@@ -77,7 +78,7 @@ If you have the cc-sessions MCP server, raise the decision with its ask_user too
 - **Status:** each session is launched with its own `--settings` file that adds hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`). The hooks report to an HTTP server on `127.0.0.1`, on a random port and with a per-run token.
 - **Fallback:** Claude Code's session registry (`~/.claude/sessions`) corrects missed hooks and shows sessions running outside the app.
 - **Inbox:** a small parser reads decision cards out of each turn's last message, and out of the transcript for turns that ended while the app was closed.
-- **MCP server:** the same local server gives sessions the app's own tools: `ask_user` and `resolve_decision` for the inbox, and `set_plugin`.
+- **MCP server:** the same local server gives sessions the app's own tools: `ask_user` and `resolve_decision` for the inbox, `schedule_reminder` (with `list_reminders` and `cancel_reminder`), and `set_plugin`.
 
 The [full guide](docs/guide.md) covers every feature, every shortcut and the internals, including the administrator helper's security model.
 

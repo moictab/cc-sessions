@@ -685,6 +685,11 @@ span.peer { color: var(--muted); font-weight: 500; }
 .admin-mark { display: inline-flex; flex: none; align-self: center; color: var(--admin); }
 .admin-mark[hidden], .tb-admin[hidden] { display: none; }
 .admin-mark svg { width: 12px; height: 12px; stroke-width: 1.7; fill: color-mix(in srgb, var(--admin) 22%, transparent); }
+
+/* ---------- Reminders a session set for itself ---------- */
+.rem-mark { display: inline-flex; flex: none; align-self: center; color: var(--muted); }
+.rem-mark[hidden] { display: none; }
+.rem-mark svg { width: 12px; height: 12px; stroke-width: 1.6; }
 .tb-admin {
   display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 7px 0 5px; border-radius: 10px;
   color: var(--admin); font-size: 11px; font-weight: 600;

@@ -22,6 +22,7 @@ const plugins = require('./plugins');
 const { restartNote } = require('./restart-note');
 const { adminContext } = require('./admin');
 const { repliesSinceUser } = require('./claude-history');
+const reminders = require('./reminders');
 const i18n = require('../shared/i18n');
 
 const ATTENTION = new Set(['permission', 'input', 'done']);
@@ -40,6 +41,9 @@ const APP_NOTE = '[CC Sessions]';
 const GUARD_MAX_MS = 3700 * 1000;
 const FULL_REPLY = 20000; // characters of a session's last answer kept for the inbox
 const TOOL_ASKS_PER_TURN = 3; // new decisions a session may raise with ask_user in one turn (as the rule asks)
+// A reminder's line typed in that hasn't come back as a prompt by then is typed again; due ones
+// that couldn't go in yet are tried again this often.
+const REMINDER_RETRY_MS = 30 * 1000;
 
 class SessionManager extends EventEmitter {
   /** `t(key, vars)` translates into the interface language of the moment (see shared/i18n.js). */
@@ -53,6 +57,7 @@ class SessionManager extends EventEmitter {
     this.settingsDir = settingsDir;
     this.sessions = new Map();
     this.quitting = false;
+    this.reminderTimer = null; // wakes up for the next reminder due, in any session
     // Settings files from a previous run point at a port that no longer exists.
     try { fs.rmSync(settingsDir, { recursive: true, force: true }); } catch { /* ignore */ }
     fs.mkdirSync(settingsDir, { recursive: true });
@@ -79,6 +84,7 @@ class SessionManager extends EventEmitter {
       setTimeout(() => this.spawn(s), delay);
       delay += 350;
     }
+    this.armReminders();
     this.emit('persist'); // badge colors given to sessions saved before there were any
   }
 
@@ -152,6 +158,17 @@ class SessionManager extends EventEmitter {
       // the next one gets the next number; and how many new ones it raised in the current turn.
       askSeq: Number(rec.askSeq) > 0 ? Math.min(Number(rec.askSeq), 99) : 0,
       toolAsksTurn: 0,
+      // Reminders it scheduled for itself with schedule_reminder (reminders.js), kept between runs,
+      // and the number the last one got. `reminderOut`: the line typed in for the due ones, until it
+      // comes back as a prompt ({ ids, prompt, at, proc }); `reminderDone`, the last one that did.
+      reminders: reminders.cleanReminders(rec.reminders),
+      reminderSeq: Number(rec.reminderSeq) > 0 ? Math.min(Math.floor(Number(rec.reminderSeq)), 999999) : 0,
+      reminderOut: null,
+      reminderDone: null,
+      reminderTimer: null,
+      // The user may have something typed in its prompt and not sent (see write()): a line typed
+      // in then would be sent along with it.
+      draft: false,
       inboxReplies: [], // answers typed from the inbox and not seen yet: [{ text, key }] (see userAnswered())
       userSpokeAt: 0, // when the user last wrote to it
       // Whose turn this is: started by the user, or by a note of ours or another session's
@@ -172,6 +189,9 @@ class SessionManager extends EventEmitter {
     if (!s.asks.length && s.waitingSince && s.fullReply) {
       s.asks = findAsks(s.fullReply).map((a) => ({ ...a, since: s.waitingSince }));
     }
+    // Reminders whose time came while the app wasn't running: they go in as soon as they can, late.
+    const now = Date.now();
+    for (const r of s.reminders) if (!r.due && r.at <= now) { r.due = true; r.closed = true; }
     this.sessions.set(s.id, s);
     this.emit('update', this.view(s));
     return s;
@@ -303,6 +323,9 @@ class SessionManager extends EventEmitter {
     clearTimeout(s.idleTimer); s.idleTimer = null;
     clearTimeout(s.noteTimer); s.noteTimer = null;
     clearTimeout(s.sizeTimer); s.sizeTimer = null;
+    clearTimeout(s.reminderTimer); s.reminderTimer = null;
+    s.reminderOut = null; // typed into the old process: typed again into the new one
+    s.draft = false;
     s.resumeNote = typeof note === 'string' ? note : '';
     s.buffer = '';
     s.pending = '';
@@ -323,8 +346,10 @@ class SessionManager extends EventEmitter {
     clearTimeout(s.noteTimer);
     clearTimeout(s.sizeTimer);
     clearTimeout(s.guardTimer);
+    clearTimeout(s.reminderTimer);
     this.clearWind(s);
     this.sessions.delete(id);
+    this.armReminders(); // its reminders go with it
     for (const ext of ['.json', '.mcp.json']) {
       try { fs.rmSync(path.join(this.settingsDir, id + ext), { force: true }); } catch { /* ignore */ }
     }
@@ -346,6 +371,7 @@ class SessionManager extends EventEmitter {
    */
   killAll(timeoutMs = 3000) {
     this.quitting = true;
+    clearTimeout(this.reminderTimer);
     const exits = [];
     for (const s of this.sessions.values()) {
       const proc = s.pty;
@@ -389,6 +415,11 @@ class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s || !s.pty || typeof data !== 'string') return;
     s.pty.write(data);
+    // Something typed or pasted and not sent: until Enter (or Ctrl+C, which clears the prompt),
+    // reminders wait. Arrows, focus reports and the like don't count. A paste's line breaks don't send.
+    if (data.includes('\x1b[200~')) s.draft = true;
+    else if (data.includes('\r') || data.includes('\x03')) s.draft = false;
+    else if (/[^\x00-\x1f\x7f]/.test(data.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\x1bO?[\s\S]?/g, ''))) s.draft = true;
     // Answering a permission prompt or a question doesn't fire any hook until the tool
     // finishes; assume Enter means "answered". The registry corrects it if it was a "no".
     if ((s.status === 'permission' || s.status === 'input') && data.includes('\r')) {
@@ -439,12 +470,13 @@ class SessionManager extends EventEmitter {
       case 'SessionStart': {
         if (p.source === 'startup' || p.source === 'resume') this.resendSizeIfChanged(s);
         // A new conversation (or /clear): whatever it was waiting for belonged to the old one, and
-        // its decisions start again at D1.
+        // its decisions start again at D1. Its reminders stay: they're the session's, not the
+        // conversation's (startContext() tells it about them).
         if (p.source === 'startup' || p.source === 'clear') { this.clearWaiting(s); s.askSeq = 0; }
         // Auto-compaction restarts the session mid-turn; keep whatever we had.
         if (p.source !== 'compact') this.setStatus(s, 'ready');
         // On every start, resume, /clear and compaction, so it's never forgotten.
-        const context = this.startContext(s);
+        const context = this.startContext(s, p.source);
         return context ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } } : null;
       }
       case 'UserPromptSubmit': {
@@ -453,18 +485,23 @@ class SessionManager extends EventEmitter {
         // Any prompt of the user's in a turn makes it theirs; the others only start one.
         if (byUser) s.turnByUser = true;
         else if (s.status !== 'busy') s.turnByUser = false;
+        if (byUser) s.draft = false;
         s.toolAsksTurn = 0;
+        // The line we typed for its due reminders (it starts with APP_NOTE, so it's no answer of the
+        // user's): their text goes with it as context. Only that exact line, typed by us.
+        const reminderContext = this.reminderPrompt(s, p.prompt);
         if (envelopes.length) {
           // Turn started by another session's message, not by the user.
           const e = envelopes[envelopes.length - 1];
           // Stored as text (and persisted): it stays in the language it was written in.
           s.lastPrompt = this.t('session.messageFrom', { name: e.fromName || this.t('session.anotherSession'), body: e.body }).slice(0, 2000);
         } else if (typeof p.prompt === 'string') {
-          s.lastPrompt = p.prompt.slice(0, 2000);
+          s.lastPrompt = (reminderContext ? reminderContext.shown : p.prompt).slice(0, 2000);
           if (!p.prompt.startsWith(APP_NOTE)) this.userAnswered(s, p.prompt);
         }
         if (s.interrupted) { s.interrupted = false; this.emit('persist'); }
         this.setStatus(s, 'busy');
+        if (reminderContext) return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: reminderContext.context } };
         break;
       }
       case 'PreToolUse':
@@ -531,15 +568,20 @@ class SessionManager extends EventEmitter {
     return null;
   }
 
-  /** What a session should know as it starts: that it runs as administrator, or no longer does. */
-  startContext(s) {
-    if (s.admin) return adminContext({ elevated: !!s.elevated });
-    if (s.adminDropped) {
+  /**
+   * What a session should know as it starts: that it runs as administrator, or no longer does; and,
+   * when it doesn't remember them (anything but a resume), the reminders it still has pending.
+   */
+  startContext(s, source = '') {
+    let admin = '';
+    if (s.admin) admin = adminContext({ elevated: !!s.elevated });
+    else if (s.adminDropped) {
       s.adminDropped = false;
       this.emit('persist');
-      return adminContext({ dropped: true });
+      admin = adminContext({ dropped: true });
     }
-    return '';
+    const pending = !s.admin && source !== 'resume' && s.reminders.length ? reminders.remindersNote(s.reminders) : '';
+    return [admin, pending].filter(Boolean).join('\n\n');
   }
 
   // ---- waiting for the user ------------------------------------------------------------
@@ -940,7 +982,130 @@ class SessionManager extends EventEmitter {
         this.emit('persist');
         this.typeNote(s, text);
       }, 1500);
+      return;
     }
+    if (s.reminders.some((r) => r.due) && !s.reminderTimer) {
+      // Like the note: the prompt takes input a moment after the turn ends (or SessionStart).
+      s.reminderTimer = setTimeout(() => { s.reminderTimer = null; this.deliverReminders(s); }, 1500);
+    }
+  }
+
+  // ---- reminders a session schedules for itself (schedule_reminder) ------------------------
+
+  /**
+   * A reminder the session schedules for itself (mcp.js has checked `at` and `text`). Kept with the
+   * session between runs; see reminders.js for how it comes back. Not in administrator sessions.
+   * Returns (read by the model, in English) { ok, id, pending } or { ok: false, error }.
+   */
+  scheduleReminder(id, { at, text }) {
+    const s = this.sessions.get(id);
+    if (!s) return { ok: false, error: 'This session no longer exists in CC Sessions.' };
+    if (s.admin) return { ok: false, error: 'Reminders are not available in administrator sessions.' };
+    if (s.reminders.length >= reminders.MAX_PENDING) {
+      return { ok: false, error: `Not scheduled: this session already has ${reminders.MAX_PENDING} pending reminders. Cancel one first (cancel_reminder).` };
+    }
+    s.reminderSeq = Math.min(s.reminderSeq + 1, 999999);
+    const r = { id: `R${s.reminderSeq}`, at, text, created: Date.now(), due: false, closed: false };
+    s.reminders = s.reminders.concat(r).sort((x, y) => x.at - y.at);
+    this.armReminders();
+    this.emit('update', this.view(s));
+    this.emit('persist');
+    return { ok: true, id: r.id, pending: s.reminders.slice() };
+  }
+
+  listReminders(id) {
+    const s = this.sessions.get(id);
+    return s ? { ok: true, pending: s.reminders.slice() } : { ok: false, error: 'This session no longer exists in CC Sessions.' };
+  }
+
+  cancelReminder(id, rid) {
+    const s = this.sessions.get(id);
+    if (!s) return { ok: false, error: 'This session no longer exists in CC Sessions.' };
+    const key = String(rid || '').trim().toUpperCase();
+    const r = s.reminders.find((x) => x.id === key);
+    if (!r) return { ok: false, pending: s.reminders.slice() };
+    s.reminders = s.reminders.filter((x) => x !== r);
+    this.armReminders();
+    this.emit('update', this.view(s));
+    this.emit('persist');
+    return { ok: true, pending: s.reminders.slice() };
+  }
+
+  /**
+   * One timer for every session's reminders: at the next one due, or, while some are due and not
+   * delivered yet, every REMINDER_RETRY_MS (an hour at most, so a long wait doesn't overflow it).
+   */
+  armReminders() {
+    clearTimeout(this.reminderTimer);
+    this.reminderTimer = null;
+    if (this.quitting) return;
+    const now = Date.now();
+    let next = Infinity;
+    for (const s of this.sessions.values()) {
+      for (const r of s.reminders) next = Math.min(next, r.due ? now + REMINDER_RETRY_MS : r.at);
+    }
+    if (next === Infinity) return;
+    this.reminderTimer = setTimeout(() => this.checkReminders(), Math.min(Math.max(next - now, 0) + 50, 60 * 60 * 1000));
+  }
+
+  checkReminders() {
+    this.reminderTimer = null;
+    const now = Date.now();
+    for (const s of this.sessions.values()) {
+      const due = s.reminders.filter((r) => !r.due && r.at <= now);
+      for (const r of due) r.due = true;
+      if (due.length) this.emit('persist');
+      this.deliverReminders(s);
+    }
+    this.armReminders();
+  }
+
+  /**
+   * The due ones go in together when the session is idle and nothing else is about to be typed into
+   * it: not while it starts, works, waits on a permission or a question, winds down before a restart
+   * of the app or has a restart or a note pending; nor while the user may have something half typed
+   * in its prompt, or in an administrator session (whose hooks' answers go nowhere). What's typed is
+   * a fixed line that names them; their text goes in as that prompt's context (reminderPrompt()).
+   */
+  deliverReminders(s) {
+    if (!s.pty || s.admin || !IDLE.has(s.status) || s.restartWhenIdle || s.wind || s.resumeNote || s.draft) return;
+    const out = s.reminderOut;
+    if (out && out.proc === s.pty && Date.now() - out.at < REMINDER_RETRY_MS) return; // typed: on its way
+    const due = s.reminders.filter((r) => r.due);
+    if (!due.length) return;
+    const ids = due.map((r) => r.id);
+    const prompt = this.t(ids.length > 1 ? 'reminder.promptMany' : 'reminder.prompt', { ids: ids.join(', ') });
+    s.reminderOut = { ids, prompt, at: Date.now(), proc: s.pty };
+    this.typeNote(s, prompt);
+  }
+
+  /**
+   * A prompt arrived (UserPromptSubmit). If it's exactly the line we typed for its reminders, they're
+   * delivered: { context, shown } (the hook context, and what the app shows as its last prompt).
+   * The same line coming back a second time (typed again while the first was still on its way)
+   * only says so.
+   */
+  reminderPrompt(s, prompt) {
+    if (typeof prompt !== 'string' || !prompt.startsWith(APP_NOTE)) return null;
+    const line = prompt.trim();
+    const out = s.reminderOut;
+    if (!out || line !== out.prompt) {
+      const done = s.reminderDone;
+      if (done && line === done.prompt && Date.now() - done.at < 10 * 60 * 1000) {
+        return { context: `[CC Sessions] This line was typed twice by mistake: ${done.ids.join(', ')} already arrived above. Nothing to do.`, shown: line };
+      }
+      return null;
+    }
+    s.reminderOut = null;
+    s.reminderDone = { prompt: line, ids: out.ids, at: Date.now() };
+    const list = s.reminders.filter((r) => out.ids.includes(r.id));
+    s.reminders = s.reminders.filter((r) => !out.ids.includes(r.id));
+    this.armReminders();
+    this.emit('update', this.view(s));
+    this.emit('persist');
+    if (!list.length) return { context: '[CC Sessions] This line was typed for a reminder that was cancelled before it arrived. Nothing to do.', shown: line };
+    const shown = this.t('session.reminder', { ids: list.map((r) => r.id).join(', '), text: list.map((r) => r.text.replace(/\s+/g, ' ')).join(' · ') });
+    return { context: reminders.reminderContext(list), shown };
   }
 
   /** Plugins this session can switch on or off, and their state. */
@@ -1166,6 +1331,8 @@ class SessionManager extends EventEmitter {
       waitingSince: s.waitingSince,
       asks: s.asks,
       askSeq: s.askSeq,
+      reminders: s.reminders,
+      reminderSeq: s.reminderSeq,
       fullReply: s.fullReply,
       dismissedAt: s.dismissedAt,
     }));
@@ -1198,6 +1365,7 @@ class SessionManager extends EventEmitter {
       asks: s.asks.map((a) => ({ ...a, task: isTask(a) })),
       quietTurn: s.quietTurn, // its last turn wasn't yours: finished without asking for attention
       guard: s.guard.length ? { count: s.guard.length, since: s.guard[0].at } : null, // image-guard windows open
+      reminders: s.reminders.map(({ id, at, text, due }) => ({ id, at, text, due })), // set for itself (schedule_reminder)
     };
   }
 }
