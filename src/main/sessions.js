@@ -39,6 +39,7 @@ const APP_NOTE = '[CC Sessions]';
 // The longest an image-guard window can stay open: Claude Code kills a hook after this long.
 const GUARD_MAX_MS = 3700 * 1000;
 const FULL_REPLY = 20000; // characters of a session's last answer kept for the inbox
+const TOOL_ASKS_PER_TURN = 3; // new decisions a session may raise with ask_user in one turn (as the rule asks)
 
 class SessionManager extends EventEmitter {
   /** `t(key, vars)` translates into the interface language of the moment (see shared/i18n.js). */
@@ -144,8 +145,13 @@ class SessionManager extends EventEmitter {
       // decide, one entry per question (see findAsks()). Notes of ours and other sessions'
       // messages also start turns, but only the user's own prompt answers.
       waitingSince: Number(rec.waitingSince) > 0 ? Number(rec.waitingSince) : null,
-      asks: cleanAsks(rec.asks, rec.decision), // [{ key, label, topic, text, since }] (see also the end of add())
+      // [{ key, label, topic, text, since, …, tool }] (tool: raised with ask_user; see also the end of add())
+      asks: cleanAsks(rec.asks, rec.decision),
       asksFrom: 0, // when the message they came from was written (ms; 0: not known)
+      // The highest D-number its ask_user decisions have used in this conversation (persisted), so
+      // the next one gets the next number; and how many new ones it raised in the current turn.
+      askSeq: Number(rec.askSeq) > 0 ? Math.min(Number(rec.askSeq), 99) : 0,
+      toolAsksTurn: 0,
       inboxReplies: [], // answers typed from the inbox and not seen yet: [{ text, key }] (see userAnswered())
       userSpokeAt: 0, // when the user last wrote to it
       // Whose turn this is: started by the user, or by a note of ours or another session's
@@ -432,8 +438,9 @@ class SessionManager extends EventEmitter {
     switch (p.hook_event_name) {
       case 'SessionStart': {
         if (p.source === 'startup' || p.source === 'resume') this.resendSizeIfChanged(s);
-        // A new conversation (or /clear): whatever it was waiting for belonged to the old one.
-        if (p.source === 'startup' || p.source === 'clear') this.clearWaiting(s);
+        // A new conversation (or /clear): whatever it was waiting for belonged to the old one, and
+        // its decisions start again at D1.
+        if (p.source === 'startup' || p.source === 'clear') { this.clearWaiting(s); s.askSeq = 0; }
         // Auto-compaction restarts the session mid-turn; keep whatever we had.
         if (p.source !== 'compact') this.setStatus(s, 'ready');
         // On every start, resume, /clear and compaction, so it's never forgotten.
@@ -446,6 +453,7 @@ class SessionManager extends EventEmitter {
         // Any prompt of the user's in a turn makes it theirs; the others only start one.
         if (byUser) s.turnByUser = true;
         else if (s.status !== 'busy') s.turnByUser = false;
+        s.toolAsksTurn = 0;
         if (envelopes.length) {
           // Turn started by another session's message, not by the user.
           const e = envelopes[envelopes.length - 1];
@@ -551,9 +559,13 @@ class SessionManager extends EventEmitter {
    * asked before keep their age.
    */
   setAsks(s, found, { since = Date.now(), from = Date.now(), complete = false } = {}) {
+    // Decisions raised with the ask_user tool (askFromTool) are the tool's: a message's text neither
+    // changes nor closes them, even a "Pendiente de ti" block that leaves them out.
+    const fromTool = new Set(s.asks.filter((a) => a.tool).map((a) => a.key));
+    found = found.filter((a) => !fromTool.has(a.key));
     const before = new Map(s.asks.map((a) => [a.key, a]));
     const keys = new Set(found.map((a) => a.key));
-    const kept = complete ? [] : s.asks.filter((a) => !keys.has(a.key));
+    const kept = complete ? s.asks.filter((a) => a.tool) : s.asks.filter((a) => !keys.has(a.key));
     s.asks = kept.concat(found.map((a) => {
       const was = before.get(a.key);
       if (!was) return { summary: '', options: [], fallback: '', context: '', ...a, since };
@@ -569,9 +581,61 @@ class SessionManager extends EventEmitter {
       };
     })).slice(-30);
     s.asksFrom = from;
+    // Numbers it used in text count too: a decision raised next with ask_user gets the one after.
+    for (const a of found) {
+      const n = /^D(\d{1,2})$/.exec(a.label || '');
+      if (n) s.askSeq = Math.max(s.askSeq, Number(n[1]));
+    }
     if (!s.waitingSince && s.asks.length) s.waitingSince = since; // asking makes it the user's turn, quiet or not
     this.emit('update', this.view(s));
     this.emit('persist');
+  }
+
+  /**
+   * A decision raised with the ask_user tool (mcp.js), already checked there: nothing to parse. It
+   * joins the ones open, or replaces the open one with the same label. Numbered D1, D2… along the
+   * conversation, unless the session gives its own label. Returns { ok, label, updated, open } or
+   * { ok: false, error } (read by the model: in English).
+   */
+  askFromTool(id, d) {
+    const s = this.sessions.get(id);
+    if (!s) return { ok: false, error: 'This session no longer exists in CC Sessions.' };
+    const label = d.label || nextLabel(s);
+    const was = s.asks.find((a) => a.key === label);
+    if (!was && s.toolAsksTurn >= TOOL_ASKS_PER_TURN) {
+      return { ok: false, error: `Not registered: at most ${TOOL_ASKS_PER_TURN} new decisions per turn. Keep the most important ones open and raise the rest later.` };
+    }
+    const ask = {
+      ...toAsk(`${label}: ${d.question}`),
+      summary: d.summary,
+      options: d.options,
+      fallback: d.fallback,
+      context: d.context,
+      since: was ? was.since : Date.now(),
+      tool: true,
+    };
+    s.asks = was ? s.asks.map((a) => (a === was ? ask : a)) : s.asks.concat(ask).slice(-30);
+    if (!was) s.toolAsksTurn++;
+    const n = /^D(\d{1,2})$/.exec(label);
+    if (n) s.askSeq = Math.max(s.askSeq, Number(n[1]));
+    s.asksFrom = Date.now();
+    if (!s.waitingSince) s.waitingSince = ask.since; // asking makes it the user's turn
+    this.emit('update', this.view(s));
+    this.emit('persist');
+    return { ok: true, label, updated: !!was, open: s.asks.map(askName) };
+  }
+
+  /** The ask_user tool's way out: the session takes one of its open questions off the inbox. */
+  resolveAsk(id, label) {
+    const s = this.sessions.get(id);
+    if (!s) return { ok: false, error: 'This session no longer exists in CC Sessions.' };
+    const key = String(label || '').trim().toUpperCase();
+    const ask = s.asks.find((a) => a.label && a.label.toUpperCase() === key);
+    if (!ask) return { ok: false, open: s.asks.map(askName) };
+    s.asks = s.asks.filter((a) => a !== ask);
+    this.emit('update', this.view(s));
+    this.emit('persist');
+    return { ok: true, open: s.asks.map(askName) };
   }
 
   /**
@@ -1101,6 +1165,7 @@ class SessionManager extends EventEmitter {
       resumeNote: s.resumeNote,
       waitingSince: s.waitingSince,
       asks: s.asks,
+      askSeq: s.askSeq,
       fullReply: s.fullReply,
       dismissedAt: s.dismissedAt,
     }));
@@ -1228,6 +1293,15 @@ function toAsk(text) {
 function uniqueAsks(list) {
   const seen = new Set();
   return list.filter((a) => (seen.has(a.key) ? false : seen.add(a.key)));
+}
+
+/** The next number for a decision raised with ask_user: one past the highest used or open. */
+function nextLabel(s) {
+  const used = s.asks.map((a) => /^D(\d{1,2})$/.exec(a.label || '')).filter(Boolean).map((m) => Number(m[1]));
+  const n = Math.max(s.askSeq, ...used) + 1;
+  if (n <= 99) return `D${n}`;
+  for (let k = 1; k <= 99; k++) if (!used.includes(k)) return `D${k}`; // a very long conversation
+  return 'D99';
 }
 
 /** How an answer from the inbox names the question it answers. */
@@ -1421,6 +1495,7 @@ function cleanAsks(asks, decision) {
       fallback: str(a.fallback, 400),
       context: str(a.context, 5000),
       since: when(a.since),
+      ...(a.tool ? { tool: true } : {}), // raised with ask_user
     })));
   }
   if (decision && typeof decision.text === 'string' && decision.text) {

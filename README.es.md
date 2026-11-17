@@ -13,7 +13,7 @@ Con varios agentes de Claude Code a la vez, lo difícil es saber cuál te espera
 ## Lo mejor
 
 - **Estado en vivo de cada sesión.** Trabajando, Necesita permiso (con el comando), Te pregunta (con la pregunta), Necesita tu decisión, Tu turno. Las que te necesitan suben arriba. Con la ventana en segundo plano te llega además una notificación de Windows y parpadea la barra de tareas.
-- **Una bandeja con todo lo que espera de ti** (`Ctrl+Shift+I`). Permisos, preguntas y decisiones, de la más antigua a la más nueva, cada una con cuánto lleva esperando y su contexto. Las tarjetas de decisión traen un botón por opción, y un clic escribe la respuesta en la sesión.
+- **Una bandeja con todo lo que espera de ti** (`Ctrl+Shift+I`). Permisos, preguntas y decisiones, de la más antigua a la más nueva, cada una con cuánto lleva esperando y su contexto. Las tarjetas de decisión traen un botón por opción, y un clic escribe la respuesta en la sesión. Las sesiones las plantean con la herramienta `ask_user` de la app, o como tarjeta en su mensaje.
 - **Sigues donde lo dejaste.** Las sesiones, los grupos, la vista y la posición de la ventana se guardan continuamente. Al volver a abrir, cada conversación se retoma con `claude --resume`, y una sesión cortada a mitad de turno ofrece el botón «Pedir que continúe».
 - **Pensada para muchas sesiones.** Vista individual o en cuadrícula, grupos, insignias de color, buscador rápido (`Ctrl+Shift+K`), «ir a la siguiente que me necesita» (`Ctrl+Shift+J`) y las sesiones que tienes abiertas en otras terminales.
 - **Mensajes entre sesiones.** Un panel muestra lo que tus agentes se dicen con `SendMessage` y si ya lo han leído.
@@ -65,13 +65,19 @@ con una línea por cosa («- D1: …»).
 
 También valen en inglés (`I need your decision`, `Waiting on you`).
 
+Dentro de CC Sessions, las sesiones pueden saltarse el formato de texto: el servidor MCP de la app les da la herramienta `ask_user`, que pone la misma tarjeta en la bandeja a partir de datos estructurados y comprobados, y `resolve_decision`, para retirarla. Las sesiones de fuera de la app y las de administrador siguen con la tarjeta. Para que prefieran la herramienta, añade al texto de arriba una línea como esta:
+
+```markdown
+Si tienes el servidor MCP cc-sessions, plantea la decisión con su herramienta ask_user en vez de escribir la tarjeta, y nómbrala en una línea de tu mensaje.
+```
+
 ## Cómo funciona
 
 - **Terminales:** Electron, [xterm.js](https://xtermjs.org/) con su renderizado WebGL y [node-pty](https://github.com/microsoft/node-pty) sobre ConPTY de Windows.
 - **Estado:** cada sesión se lanza con su propio fichero `--settings`, que añade hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`). Los hooks informan a un servidor HTTP en `127.0.0.1`, con puerto aleatorio y un token por arranque.
 - **Respaldo:** el registro de sesiones de Claude Code (`~/.claude/sessions`) corrige los hooks perdidos y muestra las sesiones abiertas fuera de la app.
 - **Bandeja:** un pequeño analizador lee las tarjetas de decisión del último mensaje de cada turno. Para los turnos que terminaron con la app cerrada, las busca en la transcripción.
-- **Servidor MCP:** el mismo servidor local ofrece la herramienta `set_plugin`, que las sesiones pueden usar.
+- **Servidor MCP:** el mismo servidor local da a las sesiones herramientas propias de la app: `ask_user` y `resolve_decision` para la bandeja, y `set_plugin`.
 
 La [guía completa](docs/guia.md) explica cada función, todos los atajos y cómo funciona por dentro, incluido el modelo de seguridad del auxiliar de administrador.
 
