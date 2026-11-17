@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('ccsm', {
   reload: () => ipcRenderer.send('ui:reload'),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
   testAlert: () => ipcRenderer.invoke('alerts:test'),
+  inboxStatus: () => ipcRenderer.invoke('inbox:status'),
 
   pickFolder: () => ipcRenderer.invoke('dialog:folder'),
   listProjects: () => ipcRenderer.invoke('history:projects'),
@@ -59,5 +60,6 @@ contextBridge.exposeInMainWorld('ccsm', {
   onMessage: (cb) => on('messages:update', cb),
   onMessagesCleared: (cb) => on('messages:cleared', cb),
   onAdminNotice: (cb) => on('admin:notice', cb),
+  onInboxUpdate: (cb) => on('inbox:update', cb),
   clearMessages: () => ipcRenderer.invoke('messages:clear'),
 });

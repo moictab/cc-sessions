@@ -1722,7 +1722,54 @@
     testRow.append(testBtn, testResult);
     cmdField.append(cmdLabel, cmdInput, el('span', 'set-hint', t('settings.alertsCommandHint')), testRow);
 
-    body.append(fontField, sizeField, preview, uiSection, langField, listField, listNote, animRow, alertSection, alertNote, afterField, cmdField);
+    // Alert inbox (alert-inbox.js in the main process): its three settings, its state and its log
+    const inboxSection = el('h3', 'set-section set-section-gap', t('settings.inbox'));
+    const inboxNote = el('p', 'set-hint set-alert-note', t('settings.inboxNote'));
+    const box = ui.settings.inbox || { folder: null, session: null, kinds: [] };
+    const inboxField = (key, id, value, save, hint) => {
+      const field = el('div', 'set-field');
+      const label = el('label', 'set-label', t(key));
+      const input = el('input', 'set-filter set-command');
+      input.id = id;
+      input.spellcheck = false;
+      input.value = value;
+      label.htmlFor = id;
+      input.addEventListener('change', async () => { input.value = await save(input.value); });
+      field.append(label, input);
+      if (hint) field.append(el('span', 'set-hint', hint));
+      return field;
+    };
+    const saveInbox = async (patch) => (await updateSettings({ inbox: patch })).inbox;
+    const folderField = inboxField('settings.inboxFolder', 'set-inbox-folder', box.folder || '',
+      async (v) => (await saveInbox({ folder: v })).folder || '');
+    const sessionField = inboxField('settings.inboxSession', 'set-inbox-session', box.session || '',
+      async (v) => (await saveInbox({ session: v })).session || '');
+    const kindsField = inboxField('settings.inboxKinds', 'set-inbox-kinds', (box.kinds || []).join(', '),
+      async (v) => (await saveInbox({ kinds: v.split(',').map((k) => k.trim()).filter(Boolean) })).kinds.join(', '),
+      t('settings.inboxKindsHint'));
+    const inboxState = el('p', 'set-inbox-state');
+    const inboxLogHead = el('span', 'set-label', t('settings.inboxLog'));
+    const inboxLog = el('ul', 'set-inbox-log');
+    const renderInbox = (st) => {
+      if (!st) return;
+      inboxState.dataset.state = st.state;
+      const reason = st.reason ? t(st.reason.key, st.reason.vars || {}) : '';
+      inboxState.textContent = t(`settings.inboxState.${st.state}`, { reason });
+      const when = (ms) => new Date(ms).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' });
+      const rows = (st.log || []).slice().reverse().map((e) => {
+        const li = el('li');
+        li.append(el('span', 'il-time', when(e.at)), el('span', 'il-id', e.id || ''), el('span', 'il-what', t(e.key, e.vars || {})));
+        return li;
+      });
+      inboxLog.replaceChildren(...(rows.length ? rows : [el('li', 'il-empty', t('settings.inboxLogEmpty'))]));
+    };
+    api.inboxStatus().then(renderInbox).catch(() => { /* shown as it is */ });
+    const stopInbox = api.onInboxUpdate(renderInbox);
+    const inboxLogField = el('div', 'set-field');
+    inboxLogField.append(inboxLogHead, inboxLog);
+
+    body.append(fontField, sizeField, preview, uiSection, langField, listField, listNote, animRow, alertSection, alertNote, afterField, cmdField,
+      inboxSection, inboxNote, folderField, sessionField, kindsField, inboxState, inboxLogField);
     modal.appendChild(body);
 
     let families = null;
@@ -1796,7 +1843,7 @@
     });
     sizeReset.addEventListener('click', async () => { await setFontSize(null); render(); });
 
-    openModal(modal, { see: true });
+    openModal(modal, { see: true, onClose: stopInbox });
     render();
     filter.focus();
 

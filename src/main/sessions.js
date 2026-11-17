@@ -41,9 +41,9 @@ const APP_NOTE = '[CC Sessions]';
 const GUARD_MAX_MS = 3700 * 1000;
 const FULL_REPLY = 20000; // characters of a session's last answer kept for the inbox
 const TOOL_ASKS_PER_TURN = 3; // new decisions a session may raise with ask_user in one turn (as the rule asks)
-// A reminder's line typed in that hasn't come back as a prompt by then is typed again; due ones
-// that couldn't go in yet are tried again this often.
-const REMINDER_RETRY_MS = 30 * 1000;
+// A notice's line (a reminder's, an alert's) typed in that hasn't come back as a prompt by then is
+// typed again; due reminders that couldn't go in yet are tried again this often.
+const NOTICE_RETRY_MS = 30 * 1000;
 
 class SessionManager extends EventEmitter {
   /** `t(key, vars)` translates into the interface language of the moment (see shared/i18n.js). */
@@ -159,12 +159,16 @@ class SessionManager extends EventEmitter {
       askSeq: Number(rec.askSeq) > 0 ? Math.min(Number(rec.askSeq), 99) : 0,
       toolAsksTurn: 0,
       // Reminders it scheduled for itself with schedule_reminder (reminders.js), kept between runs,
-      // and the number the last one got. `reminderOut`: the line typed in for the due ones, until it
-      // comes back as a prompt ({ ids, prompt, at, proc }); `reminderDone`, the last one that did.
+      // and the number the last one got.
       reminders: reminders.cleanReminders(rec.reminders),
       reminderSeq: Number(rec.reminderSeq) > 0 ? Math.min(Math.floor(Number(rec.reminderSeq)), 999999) : 0,
-      reminderOut: null,
-      reminderDone: null,
+      // Notices from the alert inbox (alert-inbox.js) waiting to go in: [{ id, kind, prompt, context, shown }].
+      // Not kept: the inbox's folder is where they're kept, and the inbox hands them over again.
+      alerts: [],
+      // The line typed in for due reminders or an alert, until it comes back as a prompt
+      // ({ ids, alert, prompt, at, proc }); `noticeDone`, the last one that did.
+      noticeOut: null,
+      noticeDone: null,
       reminderTimer: null,
       // The user may have something typed in its prompt and not sent (see write()): a line typed
       // in then would be sent along with it.
@@ -324,7 +328,7 @@ class SessionManager extends EventEmitter {
     clearTimeout(s.noteTimer); s.noteTimer = null;
     clearTimeout(s.sizeTimer); s.sizeTimer = null;
     clearTimeout(s.reminderTimer); s.reminderTimer = null;
-    s.reminderOut = null; // typed into the old process: typed again into the new one
+    s.noticeOut = null; // typed into the old process: typed again into the new one
     s.draft = false;
     s.resumeNote = typeof note === 'string' ? note : '';
     s.buffer = '';
@@ -487,9 +491,9 @@ class SessionManager extends EventEmitter {
         else if (s.status !== 'busy') s.turnByUser = false;
         if (byUser) s.draft = false;
         s.toolAsksTurn = 0;
-        // The line we typed for its due reminders (it starts with APP_NOTE, so it's no answer of the
-        // user's): their text goes with it as context. Only that exact line, typed by us.
-        const reminderContext = this.reminderPrompt(s, p.prompt);
+        // The line we typed for its due reminders or an alert (it starts with APP_NOTE, so it's no
+        // answer of the user's): their text goes with it as context. Only that exact line, typed by us.
+        const reminderContext = this.noticePrompt(s, p.prompt);
         if (envelopes.length) {
           // Turn started by another session's message, not by the user.
           const e = envelopes[envelopes.length - 1];
@@ -984,9 +988,9 @@ class SessionManager extends EventEmitter {
       }, 1500);
       return;
     }
-    if (s.reminders.some((r) => r.due) && !s.reminderTimer) {
+    if ((s.reminders.some((r) => r.due) || s.alerts.length) && !s.reminderTimer) {
       // Like the note: the prompt takes input a moment after the turn ends (or SessionStart).
-      s.reminderTimer = setTimeout(() => { s.reminderTimer = null; this.deliverReminders(s); }, 1500);
+      s.reminderTimer = setTimeout(() => { s.reminderTimer = null; this.deliverNotices(s); }, 1500);
     }
   }
 
@@ -1033,7 +1037,7 @@ class SessionManager extends EventEmitter {
 
   /**
    * One timer for every session's reminders: at the next one due, or, while some are due and not
-   * delivered yet, every REMINDER_RETRY_MS (an hour at most, so a long wait doesn't overflow it).
+   * delivered yet, every NOTICE_RETRY_MS (an hour at most, so a long wait doesn't overflow it).
    */
   armReminders() {
     clearTimeout(this.reminderTimer);
@@ -1042,7 +1046,7 @@ class SessionManager extends EventEmitter {
     const now = Date.now();
     let next = Infinity;
     for (const s of this.sessions.values()) {
-      for (const r of s.reminders) next = Math.min(next, r.due ? now + REMINDER_RETRY_MS : r.at);
+      for (const r of s.reminders) next = Math.min(next, r.due ? now + NOTICE_RETRY_MS : r.at);
     }
     if (next === Infinity) return;
     this.reminderTimer = setTimeout(() => this.checkReminders(), Math.min(Math.max(next - now, 0) + 50, 60 * 60 * 1000));
@@ -1055,49 +1059,62 @@ class SessionManager extends EventEmitter {
       const due = s.reminders.filter((r) => !r.due && r.at <= now);
       for (const r of due) r.due = true;
       if (due.length) this.emit('persist');
-      this.deliverReminders(s);
+      this.deliverNotices(s);
     }
     this.armReminders();
   }
 
   /**
-   * The due ones go in together when the session is idle and nothing else is about to be typed into
-   * it: not while it starts, works, waits on a permission or a question, winds down before a restart
-   * of the app or has a restart or a note pending; nor while the user may have something half typed
-   * in its prompt, or in an administrator session (whose hooks' answers go nowhere). What's typed is
-   * a fixed line that names them; their text goes in as that prompt's context (reminderPrompt()).
+   * Notices go in when the session is idle and nothing else is about to be typed into it: not while
+   * it starts, works, waits on a permission or a question, winds down before a restart of the app or
+   * has a restart or a note pending; nor while the user may have something half typed in its prompt,
+   * or in an administrator session (whose hooks' answers go nowhere). First its due reminders, all
+   * together; then one alert. What's typed is a fixed line that names them; what they say goes in as
+   * that prompt's context (noticePrompt()).
    */
-  deliverReminders(s) {
+  deliverNotices(s) {
     if (!s.pty || s.admin || !IDLE.has(s.status) || s.restartWhenIdle || s.wind || s.resumeNote || s.draft) return;
-    const out = s.reminderOut;
-    if (out && out.proc === s.pty && Date.now() - out.at < REMINDER_RETRY_MS) return; // typed: on its way
+    const out = s.noticeOut;
+    if (out && out.proc === s.pty && Date.now() - out.at < NOTICE_RETRY_MS) return; // typed: on its way
     const due = s.reminders.filter((r) => r.due);
-    if (!due.length) return;
-    const ids = due.map((r) => r.id);
-    const prompt = this.t(ids.length > 1 ? 'reminder.promptMany' : 'reminder.prompt', { ids: ids.join(', ') });
-    s.reminderOut = { ids, prompt, at: Date.now(), proc: s.pty };
-    this.typeNote(s, prompt);
+    let next = null;
+    if (due.length) {
+      const ids = due.map((r) => r.id);
+      next = { ids, alert: null, prompt: this.t(ids.length > 1 ? 'reminder.promptMany' : 'reminder.prompt', { ids: ids.join(', ') }) };
+    } else if (s.alerts.length) {
+      next = { ids: [], alert: s.alerts[0].id, prompt: s.alerts[0].prompt };
+    }
+    if (!next) return;
+    s.noticeOut = { ...next, at: Date.now(), proc: s.pty };
+    this.typeNote(s, next.prompt);
   }
 
   /**
-   * A prompt arrived (UserPromptSubmit). If it's exactly the line we typed for its reminders, they're
-   * delivered: { context, shown } (the hook context, and what the app shows as its last prompt).
-   * The same line coming back a second time (typed again while the first was still on its way)
-   * only says so.
+   * A prompt arrived (UserPromptSubmit). If it's exactly the line we typed for its reminders or an
+   * alert, they're delivered: { context, shown } (the hook context, and what the app shows as its
+   * last prompt). The same line coming back a second time (typed again while the first was still on
+   * its way) only says so.
    */
-  reminderPrompt(s, prompt) {
+  noticePrompt(s, prompt) {
     if (typeof prompt !== 'string' || !prompt.startsWith(APP_NOTE)) return null;
     const line = prompt.trim();
-    const out = s.reminderOut;
+    const out = s.noticeOut;
     if (!out || line !== out.prompt) {
-      const done = s.reminderDone;
+      const done = s.noticeDone;
       if (done && line === done.prompt && Date.now() - done.at < 10 * 60 * 1000) {
-        return { context: `[CC Sessions] This line was typed twice by mistake: ${done.ids.join(', ')} already arrived above. Nothing to do.`, shown: line };
+        return { context: `[CC Sessions] This line was typed twice by mistake: ${done.what} already arrived above. Nothing to do.`, shown: line };
       }
       return null;
     }
-    s.reminderOut = null;
-    s.reminderDone = { prompt: line, ids: out.ids, at: Date.now() };
+    s.noticeOut = null;
+    s.noticeDone = { prompt: line, what: out.alert || out.ids.join(', '), at: Date.now() };
+    if (out.alert) {
+      const a = s.alerts.find((x) => x.id === out.alert);
+      s.alerts = s.alerts.filter((x) => x !== a);
+      if (!a) return { context: '[CC Sessions] This line was typed for an alert that was withdrawn before it arrived. Nothing to do.', shown: line };
+      this.emit('alert-delivered', s.id, a.id);
+      return { context: a.context, shown: a.shown };
+    }
     const list = s.reminders.filter((r) => out.ids.includes(r.id));
     s.reminders = s.reminders.filter((r) => !out.ids.includes(r.id));
     this.armReminders();
@@ -1106,6 +1123,54 @@ class SessionManager extends EventEmitter {
     if (!list.length) return { context: '[CC Sessions] This line was typed for a reminder that was cancelled before it arrived. Nothing to do.', shown: line };
     const shown = this.t('session.reminder', { ids: list.map((r) => r.id).join(', '), text: list.map((r) => r.text.replace(/\s+/g, ' ')).join(' · ') });
     return { context: reminders.reminderContext(list), shown };
+  }
+
+  // ---- notices from the alert inbox (alert-inbox.js) --------------------------------------
+
+  /**
+   * The one session the inbox delivers to: the one named `name` (any case). { session } or, if there
+   * isn't exactly one that can take it, { error: 'none' | 'several' | 'admin' }.
+   */
+  alertTarget(name) {
+    const n = String(name || '').trim().toLowerCase();
+    const found = n ? [...this.sessions.values()].filter((s) => s.name.trim().toLowerCase() === n) : [];
+    if (!found.length) return { error: 'none' };
+    if (found.length > 1) return { error: 'several' };
+    if (found[0].admin) return { error: 'admin' };
+    return { session: found[0] };
+  }
+
+  /**
+   * Hands a notice from the inbox to a session, to go in when it's free (deliverNotices()); it
+   * replaces the one of the same kind still waiting there. 'alert-delivered' says when it went in.
+   */
+  queueAlert(id, notice) {
+    const s = this.sessions.get(id);
+    if (!s || s.admin) return false;
+    const was = s.alerts.find((a) => a.kind === notice.kind);
+    if (was && was.id === notice.id && was.context === notice.context) return true;
+    // Its line already typed and on its way: that one stays; the inbox tries again later.
+    if (was && s.noticeOut && s.noticeOut.alert === was.id && s.noticeOut.proc === s.pty) return false;
+    s.alerts = s.alerts.filter((a) => a.kind !== notice.kind).concat(notice);
+    if (IDLE.has(s.status) && !s.reminderTimer) {
+      s.reminderTimer = setTimeout(() => { s.reminderTimer = null; this.deliverNotices(s); }, 300);
+    }
+    return true;
+  }
+
+  /** The inbox takes a notice back (expired). Whether it was still waiting somewhere. */
+  withdrawAlert(alertId) {
+    let found = false;
+    for (const s of this.sessions.values()) {
+      if (s.alerts.some((a) => a.id === alertId)) { found = true; s.alerts = s.alerts.filter((a) => a.id !== alertId); }
+    }
+    return found;
+  }
+
+  /** Whether a notice is still waiting in some session (it goes with a session that's removed). */
+  hasAlert(alertId) {
+    for (const s of this.sessions.values()) if (s.alerts.some((a) => a.id === alertId)) return true;
+    return false;
   }
 
   /** Plugins this session can switch on or off, and their state. */

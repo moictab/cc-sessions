@@ -8,6 +8,7 @@ const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, screen, 
 const { Store } = require('./store');
 const { startHookServer } = require('./hook-server');
 const { PhoneAlert } = require('./phone-alert');
+const { AlertInbox } = require('./alert-inbox');
 const { SessionManager } = require('./sessions');
 const { Registry } = require('./registry');
 const { resolveClaude } = require('./claude-env');
@@ -41,6 +42,7 @@ let win = null;
 let store = null;
 let settings = null;
 let phoneAlert = null;
+let inbox = null; // the alert inbox (alert-inbox.js)
 let manager = null;
 let registry = null;
 let hooks = null;
@@ -290,6 +292,7 @@ async function shutdown({ relaunch = false } = {}) {
   win.hide(); // closing takes a moment: wait for the terminals out of sight
   registry.stop();
   if (phoneAlert) phoneAlert.stop();
+  if (inbox) inbox.dispose();
   await manager.killAll();
   admin.close(); // the administrator helper exits with it
   startExitWatchdog();
@@ -336,7 +339,12 @@ function registerIpc() {
     groups: Array.isArray(store.state.groups) ? store.state.groups : [],
   }));
   ipcMain.handle('messages:clear', () => messages.clear());
-  ipcMain.handle('settings:update', (_e, patch) => settings.update(patch));
+  ipcMain.handle('settings:update', (_e, patch) => {
+    const saved = settings.update(patch);
+    if (patch && patch.inbox && inbox) inbox.reconfigure();
+    return saved;
+  });
+  ipcMain.handle('inbox:status', () => (inbox ? inbox.status() : null));
   ipcMain.handle('alerts:test', () => (phoneAlert ? phoneAlert.test() : { ok: false }));
   // Synchronous so the page can put up its text in the right language before it first paints.
   ipcMain.on('settings:language', (e) => { e.returnValue = settings.get().ui.language; });
@@ -478,6 +486,10 @@ async function boot() {
   createWindow();
   manager.restore(store.state.sessions);
   registry.start();
+  // After the sessions are back, so it finds the one it delivers to.
+  inbox = new AlertInbox({ manager, settings, file: path.join(app.getPath('userData'), 'alert-inbox.json'), t });
+  inbox.on('update', (st) => send('inbox:update', st));
+  inbox.start();
 }
 
 /**

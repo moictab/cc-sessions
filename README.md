@@ -19,6 +19,7 @@ When you run several Claude Code agents at once, most of the work is noticing wh
 - **Messages between sessions.** A panel shows what your agents tell each other with `SendMessage`, and whether it has been read.
 - **Safe restarts.** Before the app restarts, every session is asked to stop its background tasks and leave its work resumable. When they're back, each one is told to carry on.
 - **Reminders that survive restarts.** A session can set itself a reminder with the app's `schedule_reminder` tool. The app keeps it across restarts of the app and of the session, and hands it over when the session is free, marked as late if the app was closed at the time.
+- **An alert inbox for system tasks.** Tasks running as administrator or SYSTEM can leave fixed-format notices in a folder only they can write to, and the app hands them to one session to look into, checked, rate-limited and labeled as not coming from you.
 - **Per-session plugins.** Turn a plugin like Playwright on in one session only. A session can also ask for it itself, through the app's built-in MCP server.
 - **Administrator sessions, done carefully.** Elevated sessions run through a small helper installed in an admin-only folder, checked file by file against a SHA-256 manifest. The app never elevates code your user account could change.
 - **Away from the PC?** If sessions wait too long while you're away, the app can run a command of your choice (for example, one that sends a message to your phone).

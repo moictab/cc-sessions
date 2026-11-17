@@ -15,6 +15,8 @@ function normalize(data) {
   const t = section(data, 'terminal');
   const u = section(data, 'ui');
   const a = section(data, 'alerts');
+  const box = section(data, 'inbox');
+  const folder = typeof box.folder === 'string' ? box.folder.trim().replace(/\\+$/, '') : '';
   const minutes = Math.round(Number(a.afterMinutes));
   // The family ends up inside a CSS font list: keep it to a plain name.
   const family = typeof t.fontFamily === 'string' ? t.fontFamily.replace(/["'\\;{}<>]/g, '').trim().slice(0, 100) : '';
@@ -35,6 +37,15 @@ function normalize(data) {
     alerts: {
       afterMinutes: a.afterMinutes != null && minutes >= LIMITS.alertMinutes.min && minutes <= LIMITS.alertMinutes.max ? minutes : null,
       command: typeof a.command === 'string' && a.command.trim() ? a.command.trim().slice(0, 1000) : null,
+    },
+    // The alert inbox (see alert-inbox.js): the folder system tasks leave notices in, the session
+    // that gets them, and the kinds of notice it accepts. Off until all three are set.
+    inbox: {
+      folder: /^[A-Za-z]:\\[^<>"|?*\x00-\x1f]*$/.test(folder) && folder.length <= 240 ? folder : null,
+      session: typeof box.session === 'string' && box.session.trim() ? box.session.trim().slice(0, 64) : null,
+      kinds: Array.isArray(box.kinds)
+        ? [...new Set(box.kinds.filter((k) => typeof k === 'string' && /^[a-z][a-z0-9]{0,23}$/.test(k)))].slice(0, 10)
+        : [],
     },
   };
 }
@@ -63,6 +74,7 @@ class Settings {
       terminal: { ...this.data.terminal, ...section(patch, 'terminal') },
       ui: { ...this.data.ui, ...section(patch, 'ui') },
       alerts: { ...this.data.alerts, ...section(patch, 'alerts') },
+      inbox: { ...this.data.inbox, ...section(patch, 'inbox') },
     });
     this.save();
     return this.data;
