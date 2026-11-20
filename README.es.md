@@ -36,8 +36,8 @@ Necesitas Windows 11, [Node.js](https://nodejs.org/) 20 o superior, [Git](https:
 Si te faltan Node.js o Git, puedes instalar los dos desde PowerShell y abrir después una ventana nueva para que estén en el PATH:
 
 ```powershell
-winget install OpenJS.NodeJS.LTS
-winget install Git.Git
+winget install -e --id OpenJS.NodeJS.LTS --source winget
+winget install -e --id Git.Git --source winget
 ```
 
 Después:
