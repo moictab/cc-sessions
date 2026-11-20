@@ -16,7 +16,7 @@ Con varios agentes de Claude Code a la vez, lo difícil es saber cuál te espera
 - **Una bandeja con todo lo que espera de ti** (`Ctrl+Shift+I`). Permisos, preguntas y decisiones, de la más antigua a la más nueva, cada una con cuánto lleva esperando y su contexto. Las tarjetas de decisión traen un botón por opción, y un clic escribe la respuesta en la sesión. Las sesiones las plantean con la herramienta `ask_user` de la app, o como tarjeta en su mensaje.
 - **Sigues donde lo dejaste.** Las sesiones, los grupos, la vista y la posición de la ventana se guardan continuamente. Al volver a abrir, cada conversación se retoma con `claude --resume`, y una sesión cortada a mitad de turno ofrece el botón «Pedir que continúe».
 - **Pensada para muchas sesiones.** Vista individual o en cuadrícula, grupos, insignias de color, buscador rápido (`Ctrl+Shift+K`), «ir a la siguiente que me necesita» (`Ctrl+Shift+J`) y las sesiones que tienes abiertas en otras terminales.
-- **Mensajes entre sesiones.** Un panel muestra lo que tus agentes se dicen con `SendMessage` y si ya lo han leído.
+- **Mensajes entre sesiones.** Un panel muestra lo que tus agentes se dicen con `SendMessage` y si ya lo han leído. Necesita Claude Code 2.1.234 o posterior.
 - **Reinicios seguros.** Antes de reiniciar la app, se pide a cada sesión que pare sus tareas en segundo plano y deje su trabajo listo para retomarlo. Al volver, a cada una se le dice que continúe.
 - **Recordatorios que sobreviven a los reinicios.** Una sesión puede programarse un recordatorio con la herramienta `schedule_reminder` de la app. La app lo guarda aunque se reinicien la app o la sesión, y se lo entrega cuando está libre, marcado como atrasado si a esa hora la app estaba cerrada.
 - **Un buzón de alertas para tareas del sistema.** Las tareas que se ejecutan como administrador o SYSTEM pueden dejar avisos de formato fijo en una carpeta en la que solo ellas escriben, y la app se los pasa a una sesión para que los revise, comprobados, con un límite de frecuencia y marcados como que no vienen de ti.
@@ -48,6 +48,8 @@ cd cc-sessions
 npm install
 npm start
 ```
+
+Si npm avisa de que no ha ejecutado los scripts de instalación de `node-pty`, puedes ignorarlo: `node-pty` trae binarios ya hechos para Windows y la app los carga tal cual.
 
 El primer arranque añade **CC Sessions** al menú Inicio; desde entonces se abre desde ahí. La interfaz está en inglés o en español (Ajustes → Interfaz → Idioma).
 

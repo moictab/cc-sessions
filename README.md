@@ -16,7 +16,7 @@ When you run several Claude Code agents at once, most of the work is noticing wh
 - **One inbox for everything waiting on you** (`Ctrl+Shift+I`). Permissions, questions and decisions, oldest first, each with how long it has waited and its context. Decision cards come with one button per option, and a click types the answer into the session. Sessions raise them with the app's `ask_user` tool, or as a card in their message.
 - **Pick up where you left off.** Sessions, groups, layout and window position are saved continuously. On the next start every conversation resumes with `claude --resume`, and a session cut off mid-turn gets an "Ask it to continue" button.
 - **Built for many sessions.** Single or grid view, groups, colored badges, a quick switcher (`Ctrl+Shift+K`), "go to the next one that needs me" (`Ctrl+Shift+J`), and the sessions you have open in other terminals.
-- **Messages between sessions.** A panel shows what your agents tell each other with `SendMessage`, and whether it has been read.
+- **Messages between sessions.** A panel shows what your agents tell each other with `SendMessage`, and whether it has been read. It needs Claude Code 2.1.234 or later.
 - **Safe restarts.** Before the app restarts, every session is asked to stop its background tasks and leave its work resumable. When they're back, each one is told to carry on.
 - **Reminders that survive restarts.** A session can set itself a reminder with the app's `schedule_reminder` tool. The app keeps it across restarts of the app and of the session, and hands it over when the session is free, marked as late if the app was closed at the time.
 - **An alert inbox for system tasks.** Tasks running as administrator or SYSTEM can leave fixed-format notices in a folder only they can write to, and the app hands them to one session to look into, checked, rate-limited and labeled as not coming from you.
@@ -48,6 +48,8 @@ cd cc-sessions
 npm install
 npm start
 ```
+
+If npm warns that `node-pty`'s install scripts weren't run, you can ignore it: `node-pty` ships ready-made binaries for Windows and the app loads them as they are.
 
 The first start adds **CC Sessions** to the Start menu; from then on, open it from there. The interface is in English or Spanish (Settings → Interface → Language).
 
