@@ -31,7 +31,16 @@ When you run several Claude Code agents at once, most of the work is noticing wh
 
 ## Install
 
-You need Windows 11, [Node.js](https://nodejs.org/) 20 or later, and [Claude Code](https://docs.claude.com/en/docs/claude-code).
+You need Windows 11, [Node.js](https://nodejs.org/) 20 or later, [Git](https://git-scm.com/) and [Claude Code](https://docs.claude.com/en/docs/claude-code).
+
+If you're missing Node.js or Git, you can install both from PowerShell, then open a new window so they're on the PATH:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+winget install Git.Git
+```
+
+Then:
 
 ```powershell
 git clone https://github.com/moictab/cc-sessions.git

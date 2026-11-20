@@ -6,7 +6,16 @@ Todo lo que hace la app, en detalle, y cómo funciona por dentro.
 
 ## Instalar
 
-Necesitas Windows 11, [Node.js](https://nodejs.org/) 20 o superior (con npm) y [Claude Code](https://docs.claude.com/en/docs/claude-code) instalado, ya sea en `~/.local/bin/claude.exe`, en el PATH o indicado con la variable `CC_SESSIONS_CLAUDE`.
+Necesitas Windows 11, [Node.js](https://nodejs.org/) 20 o superior (con npm), [Git](https://git-scm.com/) y [Claude Code](https://docs.claude.com/en/docs/claude-code) instalado, ya sea en `~/.local/bin/claude.exe`, en el PATH o indicado con la variable `CC_SESSIONS_CLAUDE`.
+
+Si te faltan Node.js o Git, puedes instalar los dos desde PowerShell y abrir después una ventana nueva para que estén en el PATH:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+winget install Git.Git
+```
+
+Después:
 
 ```powershell
 git clone https://github.com/moictab/cc-sessions.git

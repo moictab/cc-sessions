@@ -31,7 +31,16 @@ Con varios agentes de Claude Code a la vez, lo difícil es saber cuál te espera
 
 ## Instalar
 
-Necesitas Windows 11, [Node.js](https://nodejs.org/) 20 o superior y [Claude Code](https://docs.claude.com/en/docs/claude-code).
+Necesitas Windows 11, [Node.js](https://nodejs.org/) 20 o superior, [Git](https://git-scm.com/) y [Claude Code](https://docs.claude.com/en/docs/claude-code).
+
+Si te faltan Node.js o Git, puedes instalar los dos desde PowerShell y abrir después una ventana nueva para que estén en el PATH:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+winget install Git.Git
+```
+
+Después:
 
 ```powershell
 git clone https://github.com/moictab/cc-sessions.git
