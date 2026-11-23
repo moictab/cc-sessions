@@ -5,6 +5,9 @@
 // so we know exactly which terminal an event belongs to.
 // The same server answers our MCP server at /mcp/<terminalId> (see mcp.js), and image-guard's
 // notices at /guard/<terminalId> (see guardEnvFor below).
+// Each terminal has a token of its own (tokenFor): a session that reads another's token from its
+// settings file could speak for it, but its own token only lets it speak for itself, and the app
+// tells who raised or reads a decision by the terminal (see decision-log.js).
 
 const http = require('http');
 const crypto = require('crypto');
@@ -20,20 +23,27 @@ const HOOK_EVENTS = {
 };
 
 function startHookServer(onEvent, { onMcp, onGuard } = {}) {
-  const token = crypto.randomBytes(16).toString('hex');
+  // Kept in memory only: a terminal's token is derived from it, 32 hex characters (the format the
+  // administrator helper checks).
+  const secret = crypto.randomBytes(32);
+  const tokenFor = (terminalId) => crypto.createHmac('sha256', secret).update(String(terminalId)).digest('hex').slice(0, 32);
+  const tokenOk = (terminalId, given) => {
+    if (typeof given !== 'string' || given.length !== 32) return false;
+    return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(tokenFor(terminalId)));
+  };
   // A token of its own: it sits in the sessions' environment, where anything they run can read it,
   // and all it lets through is these notices.
   const guardToken = crypto.randomBytes(16).toString('hex');
 
   const server = http.createServer((req, res) => {
     const mcp = /^\/mcp\/([A-Za-z0-9-]+)$/.exec(req.url || '');
-    if (mcp && onMcp && req.headers['x-cc-sessions-token'] === token) return serveMcp(req, res, mcp[1], onMcp);
+    if (mcp && onMcp && tokenOk(mcp[1], req.headers['x-cc-sessions-token'])) return serveMcp(req, res, mcp[1], onMcp);
     const guard = /^\/guard\/([A-Za-z0-9-]+)$/.exec(req.url || '');
     if (guard && onGuard && req.method === 'POST' && req.headers['x-cc-sessions-token'] === guardToken) {
       return serveGuard(req, res, guard[1], onGuard);
     }
     const match = /^\/hook\/([A-Za-z0-9-]+)$/.exec(req.url || '');
-    if (req.method !== 'POST' || !match || req.headers['x-cc-sessions-token'] !== token) {
+    if (req.method !== 'POST' || !match || !tokenOk(match[1], req.headers['x-cc-sessions-token'])) {
       res.writeHead(403);
       res.end();
       return;
@@ -67,15 +77,15 @@ function startHookServer(onEvent, { onMcp, onGuard } = {}) {
       const { port } = server.address();
       resolve({
         port,
-        token,
+        tokenFor,
         guardToken,
         close: () => server.close(),
-        settingsFor: (terminalId) => buildSettings(port, token, terminalId),
+        settingsFor: (terminalId) => buildSettings(port, tokenFor(terminalId), terminalId),
         guardEnvFor: onGuard ? (terminalId) => ({
           CC_SESSIONS_GUARD_URL: `http://127.0.0.1:${port}/guard/${terminalId}`,
           CC_SESSIONS_GUARD_TOKEN: guardToken,
         }) : null,
-        mcpConfigFor: onMcp ? (terminalId) => buildMcpConfig(port, token, terminalId) : null,
+        mcpConfigFor: onMcp ? (terminalId) => buildMcpConfig(port, tokenFor(terminalId), terminalId) : null,
       });
     });
   });
