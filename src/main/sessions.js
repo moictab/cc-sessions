@@ -1877,7 +1877,9 @@ function cleanAsks(asks, decision) {
     return uniqueAsks(asks.filter((a) => a && typeof a.text === 'string' && a.text).slice(0, 30).map((a) => ({
       ...toAsk(a.text),
       summary: str(a.summary, 800),
-      options: Array.isArray(a.options) ? a.options.filter((o) => o && typeof o.label === 'string' && o.label).slice(0, 6).map((o) => ({ label: o.label.slice(0, 60), recommended: !!o.recommended })) : [],
+      options: Array.isArray(a.options) ? a.options.filter((o) => o && typeof o.label === 'string' && o.label).slice(0, 6).map((o) => ({
+        label: o.label.slice(0, 60), recommended: !!o.recommended, ...(o.approves ? { approves: true } : {}),
+      })) : [],
       fallback: str(a.fallback, 400),
       context: str(a.context, 5000),
       since: when(a.since),

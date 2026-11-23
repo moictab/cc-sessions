@@ -14,7 +14,9 @@
 //   One typed in the session's own terminal is noted, as "terminal", and counts for nothing.
 // - The card is bound to its answer: its SHA-256 (cardHash), as shown, goes in when it's raised, and
 //   the inbox only takes an answer to the card the user was looking at.
-// - An answer covers what the card names (actions), each so many times (uses), for 7 days.
+// - An answer covers what the card names (actions), each so many times (uses), for 7 days, and only
+//   if it is one of the options the card marked as approving (approves).
+// - No key that can be kept encrypted, no record: main.js doesn't open one, and get_decision says so.
 //
 // The key sits next to the record, encrypted for the Windows user (DPAPI, through Electron's
 // safeStorage); `protect` and `unprotect` are those two calls, passed in so this runs without Electron.
@@ -47,7 +49,7 @@ function cardHash(folder, card) {
     card.label || '',
     card.question || '',
     card.summary || '',
-    (card.options || []).map((o) => [o.label, !!o.recommended]),
+    (card.options || []).map((o) => [o.label, !!o.recommended, !!o.approves]),
     card.fallback || '',
     card.context || '',
     (card.actions || []).map((a) => [a.agent, normFolder(a.folder), a.action, a.ref || '']),
@@ -224,6 +226,7 @@ class DecisionLog {
         label: d.label,
         question: d.question,
         options: d.options || [],
+        approving: d.approving || [],
         actions: d.actions || [],
         uses: d.uses || 1,
         cardHash: d.cardHash,
@@ -268,6 +271,7 @@ class DecisionLog {
       label: card.label,
       question: card.question,
       options: card.options.map((o) => o.label),
+      approving: card.options.filter((o) => o.approves).map((o) => o.label),
       actions: (card.actions || []).map((a) => ({ agent: a.agent, folder: a.folder, action: a.action, ref: a.ref || '' })),
       uses: card.uses || 1,
       cardHash: hash,
@@ -313,6 +317,8 @@ class DecisionLog {
     if (a.via === 'terminal') return { ok: false, why: 'answered in the session\'s terminal, which cannot be checked' };
     if (!a.cardOk) return { ok: false, why: 'the card answered does not match the one raised' };
     if (a.option === null) return { ok: false, why: 'the answer is not exactly one of the options' };
+    if (!x.approving.length) return { ok: false, why: 'none of the card\'s options approves anything (none was raised with approves: true)' };
+    if (!x.approving.includes(a.option)) return { ok: false, why: `the answer, "${a.option}", is not an option that approves` };
     if (this.now() > a.at + VALID_FOR_MS) return { ok: false, why: 'expired (answers are valid for 7 days)' };
     return { ok: true, why: '' };
   }

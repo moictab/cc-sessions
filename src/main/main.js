@@ -444,21 +444,27 @@ async function boot() {
   peers.start();
   // The record of decisions and their answers (decision-log.js). Its key is kept encrypted for this
   // Windows user; the copy of its head, under HKCU, one value per data folder (tests use their own).
+  // A data folder other than the usual one (CC_SESSIONS_USER_DATA, for tests) keeps it under a key
+  // of its own, so the usual one is only ever written by the app itself.
   const decisionsDir = path.join(app.getPath('userData'), 'decisions');
-  decisionsRegistry = registryValue('HKCU\\Software\\cc-sessions\\decisions',
-    `Head-${crypto.createHash('sha256').update(decisionsDir.toLowerCase()).digest('hex').slice(0, 12)}`);
+  const regKey = process.env.CC_SESSIONS_USER_DATA ? 'HKCU\\Software\\cc-sessions-other\\decisions' : 'HKCU\\Software\\cc-sessions\\decisions';
+  decisionsRegistry = registryValue(regKey, `Head-${crypto.createHash('sha256').update(decisionsDir.toLowerCase()).digest('hex').slice(0, 12)}`);
   let decisions = null;
-  try {
-    const encrypted = safeStorage.isEncryptionAvailable();
-    if (!encrypted) console.error('[decisions] safeStorage is not available: the key is kept unencrypted');
-    decisions = new DecisionLog({
-      dir: decisionsDir,
-      protect: (text) => (encrypted ? safeStorage.encryptString(text) : Buffer.from(text, 'utf8')),
-      unprotect: (buf) => (encrypted ? safeStorage.decryptString(buf) : buf.toString('utf8')),
-      registry: decisionsRegistry,
-    });
-  } catch (err) {
-    console.error('[decisions] the record could not be opened: decisions go without one', err);
+  // Without a key kept encrypted there is no record at all (get_decision says it's not available):
+  // better than a key anyone can read.
+  if (!safeStorage.isEncryptionAvailable()) {
+    console.error('[decisions] safeStorage is not available: no record of decisions, get_decision is off');
+  } else {
+    try {
+      decisions = new DecisionLog({
+        dir: decisionsDir,
+        protect: (text) => safeStorage.encryptString(text),
+        unprotect: (buf) => safeStorage.decryptString(buf),
+        registry: decisionsRegistry,
+      });
+    } catch (err) {
+      console.error('[decisions] the record could not be opened: decisions go without one', err);
+    }
   }
   hooks = await startHookServer(async (terminalId, payload, peer) => {
     if (hookLog) {

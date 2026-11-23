@@ -2348,6 +2348,8 @@
       c.opts.replaceChildren(...options.map((o) => {
         const b = el('button', o.recommended ? 'btn-primary ib-opt' : 'btn-secondary ib-opt', o.label);
         if (o.recommended) b.appendChild(el('span', 'ib-rec', ` · ${t('inbox.recommended')}`));
+        // The option(s) that approve what the card's actions do: only those can be acted on.
+        if (o.approves && ask.decisionId) b.appendChild(el('span', 'ib-rec', ` · ${t('inbox.approves')}`));
         b.addEventListener('click', () => sendInboxReply(c, o.label));
         return b;
       }));

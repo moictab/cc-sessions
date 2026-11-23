@@ -50,8 +50,9 @@ const ASK_USER = {
     'Calling ask_user again with the label of an open decision does not change it: it withdraws it and raises a new card,',
     'with a new id, that says what it replaces.',
     'If the answer approves something that you or other sessions will carry out, name each of those in actions (who, what,',
-    'and the commit or hash): the card shows them, and they can check the answer with get_decision instead of asking the',
-    'user again. Each action is covered uses times (1 unless you say), for 7 days from the answer.',
+    'and the commit or hash), and mark the option(s) that approve with approves: true. The card shows them, and they can',
+    'check the answer with get_decision instead of asking the user again. Each action is covered uses times (1 unless you',
+    'say), for 7 days from the answer, and only by an answer that approves.',
   ].join(' '),
   inputSchema: {
     type: 'object',
@@ -74,6 +75,11 @@ const ASK_USER = {
           properties: {
             label: { type: 'string', description: 'The answer, as the button shows it.' },
             recommended: { type: 'boolean', description: 'true for the one you recommend (at most one).' },
+            approves: {
+              type: 'boolean',
+              description: 'true for the option(s) that approve what is asked (Yes, Accept…), not for No or Reject. Only an answer ' +
+                'with one of these can be acted on with use_decision; the card marks them. Required on at least one when there are actions.',
+            },
           },
           required: ['label'],
           additionalProperties: false,
@@ -143,8 +149,8 @@ const GET_DECISION = {
     'you about (for example "director D33") without asking the user again, and without taking that session\'s word for it.',
     'Give the session that raised it (its name in CC Sessions, or its project folder) and the label, or the id that came in',
     'brackets with the answer. You see only answered decisions that you raised or whose actions name your project folder.',
-    'Before acting on one, all of this must hold: integrity is "verified"; valid_to_act_on is true; the answer\'s option is',
-    'the one that approves what you are about to do; raised_by.folder is the session you expect (names can change, folders',
+    'Before acting on one, all of this must hold: integrity is "verified"; valid_to_act_on is true (which needs answer.approves:',
+    'an option the card marked as approving); raised_by.folder is the session you expect (names can change, folders',
     "don't); and an action names your folder, with the very thing and ref (commit, hash) you are about to do. Then call",
     'use_decision for that action, right before doing it. If anything does not match, do not act: ask the user.',
   ].join(' '),
@@ -167,7 +173,7 @@ const USE_DECISION = {
     'Call it right before you carry out an action that a decision covers (see get_decision). CC Sessions checks that the',
     'answer is still valid (given in its inbox, exactly one of the options, less than 7 days ago), that the action is for',
     "this session's project folder and that it has uses left, and records the use. If it refuses, do not act: ask the user.",
-    'It does not tell you whether the answer approves what you do: read its option with get_decision first.',
+    'It refuses an answer that is not one of the options the card marked as approving.',
   ].join(' '),
   inputSchema: {
     type: 'object',
@@ -257,7 +263,7 @@ function checkDecision(a) {
   } else {
     options = a.options
       .map((o) => (typeof o === 'string' ? { label: o } : o && typeof o === 'object' ? o : {}))
-      .map((o) => ({ label: line(o.label), recommended: o.recommended === true }));
+      .map((o) => ({ label: line(o.label), recommended: o.recommended === true, approves: o.approves === true }));
     if (options.some((o) => !o.label)) problems.push('every option needs a label');
     const long = options.find((o) => o.label.length > LIMITS.option);
     if (long) problems.push(`option "${long.label.slice(0, 30)}…" is longer than ${LIMITS.option} characters`);
@@ -277,6 +283,7 @@ function checkDecision(a) {
       });
     }
   }
+  if (actions.length && !options.some((o) => o.approves)) problems.push('with actions, mark the option(s) that approve them with approves: true');
   let uses = 1;
   if (a.uses !== undefined && a.uses !== null) {
     uses = Number(a.uses);
@@ -300,13 +307,16 @@ function describeDecision(log, x, auditor) {
     label: x.label,
     question: x.question,
     options: x.options,
+    approving_options: x.approving,
     actions: x.actions.map((a, i) => ({
       n: i + 1, agent: a.agent, folder: a.folder, action: a.action, ref: a.ref, uses_left: log.usesLeft(x, i + 1), used: usedBy(i + 1),
     })),
     uses_per_action: x.uses,
     card_sha256: x.cardHash,
     status: x.status,
-    answer: x.answer ? { text: x.answer.text, via: x.answer.via, option: x.answer.option, at: when(x.answer.at) } : null,
+    answer: x.answer ? {
+      text: x.answer.text, via: x.answer.via, option: x.answer.option, approves: x.approving.includes(x.answer.option), at: when(x.answer.at),
+    } : null,
     closed: x.closed ? { reason: x.closed.reason, at: when(x.closed.at) } : null,
     valid_to_act_on: v.ok,
     ...(v.ok ? {} : { why_not: v.why }),
@@ -433,7 +443,7 @@ function createMcpHandler({ manager, version }) {
     const r = log.use(did, slot, me);
     if (!r.ok) return toolError(`Refused: ${r.why}. Do not act; ask the user.`);
     return toolText(`Recorded: this session (${me.cwd}) uses ${did}${slot ? `, action ${slot}` : ''}. Uses left for it: ${r.left}. ` +
-      `The user's answer was "${x.answer.option}".`);
+      `The user's answer was "${x.answer.option}", which approves.`);
   }
 
   function callResolve(id, args) {
