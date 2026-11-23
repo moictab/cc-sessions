@@ -27,13 +27,11 @@ function startHookServer(onEvent, { onMcp, onGuard } = {}) {
   // administrator helper checks).
   const secret = crypto.randomBytes(32);
   const tokenFor = (terminalId) => crypto.createHmac('sha256', secret).update(String(terminalId)).digest('hex').slice(0, 32);
-  const tokenOk = (terminalId, given) => {
-    if (typeof given !== 'string' || given.length !== 32) return false;
-    return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(tokenFor(terminalId)));
-  };
-  // A token of its own: it sits in the sessions' environment, where anything they run can read it,
-  // and all it lets through is these notices.
-  const guardToken = crypto.randomBytes(16).toString('hex');
+  // image-guard's: one of its own per terminal too. It sits in the session's environment, where
+  // anything it runs can read it, and all it lets through is that session's window notices.
+  const guardTokenFor = (terminalId) => crypto.createHmac('sha256', secret).update(`guard|${terminalId}`).digest('hex').slice(0, 32);
+  const same = (given, want) => typeof given === 'string' && given.length === 32 && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(want));
+  const tokenOk = (terminalId, given) => same(given, tokenFor(terminalId));
 
   const server = http.createServer((req, res) => {
     // Which connection it came on, so the app can tell whose process opened it (peer-check.js).
@@ -41,7 +39,7 @@ function startHookServer(onEvent, { onMcp, onGuard } = {}) {
     const mcp = /^\/mcp\/([A-Za-z0-9-]+)$/.exec(req.url || '');
     if (mcp && onMcp && tokenOk(mcp[1], req.headers['x-cc-sessions-token'])) return serveMcp(req, res, mcp[1], onMcp, peer);
     const guard = /^\/guard\/([A-Za-z0-9-]+)$/.exec(req.url || '');
-    if (guard && onGuard && req.method === 'POST' && req.headers['x-cc-sessions-token'] === guardToken) {
+    if (guard && onGuard && req.method === 'POST' && same(req.headers['x-cc-sessions-token'], guardTokenFor(guard[1]))) {
       return serveGuard(req, res, guard[1], onGuard);
     }
     const match = /^\/hook\/([A-Za-z0-9-]+)$/.exec(req.url || '');
@@ -80,12 +78,12 @@ function startHookServer(onEvent, { onMcp, onGuard } = {}) {
       resolve({
         port,
         tokenFor,
-        guardToken,
+        guardTokenFor,
         close: () => server.close(),
         settingsFor: (terminalId) => buildSettings(port, tokenFor(terminalId), terminalId),
         guardEnvFor: onGuard ? (terminalId) => ({
           CC_SESSIONS_GUARD_URL: `http://127.0.0.1:${port}/guard/${terminalId}`,
-          CC_SESSIONS_GUARD_TOKEN: guardToken,
+          CC_SESSIONS_GUARD_TOKEN: guardTokenFor(terminalId),
         }) : null,
         mcpConfigFor: onMcp ? (terminalId) => buildMcpConfig(port, tokenFor(terminalId), terminalId) : null,
       });

@@ -68,7 +68,7 @@ function launchLine(dir, port, token) {
 
 class AdminHost {
   /**
-   * `hooks`: the hook server ({ port, tokenFor, guardToken }), which the helper's sessions report to.
+   * `hooks`: the hook server ({ port, tokenFor, guardTokenFor }), which the helper's sessions report to.
    * `notice(text | null)`: shows (or takes down) a word for the user before the UAC prompt.
    * `noElevate`: tests only, runs the helper without the prompt (and so without administrator
    * rights); only then can `dir` point somewhere other than the installed copy.
@@ -97,7 +97,7 @@ class AdminHost {
       rp.sent = true;
       this.send({
         t: 'spawn', k: rp.key, terminalId: req.terminalId, sessionId: req.sessionId, name: req.name, cwd: req.cwd,
-        cols: rp.cols, rows: rp.rows, hookPort: this.hooks.port, hookToken: this.hooks.tokenFor(req.terminalId), guardToken: this.hooks.guardToken,
+        cols: rp.cols, rows: rp.rows, hookPort: this.hooks.port, hookToken: this.hooks.tokenFor(req.terminalId), guardToken: this.hooks.guardTokenFor(req.terminalId),
       });
     }, (err) => rp.finish({ exitCode: null, error: err.reason || { key: 'admin.failed', vars: { error: err.message } } }));
     return rp;

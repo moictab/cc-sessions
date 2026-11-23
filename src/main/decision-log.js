@@ -368,6 +368,7 @@ class DecisionLog {
  */
 function registryValue(key, name) {
   const { execFileSync, execFile } = require('child_process');
+  const { REG } = require('./system-paths');
   const args = (v) => ['add', key, '/v', name, '/t', 'REG_SZ', '/d', v, '/f'];
   let writing = false;
   let next = null;
@@ -377,7 +378,7 @@ function registryValue(key, name) {
     const v = next;
     next = null;
     writing = true;
-    execFile('reg.exe', args(v), { windowsHide: true }, (err) => {
+    execFile(REG, args(v), { windowsHide: true }, (err) => {
       writing = false;
       if (err) console.error('[decisions] could not write the registry copy of the head', err.message);
       flush();
@@ -386,7 +387,7 @@ function registryValue(key, name) {
   return {
     read() {
       try {
-        const out = execFileSync('reg.exe', ['query', key, '/v', name], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        const out = execFileSync(REG, ['query', key, '/v', name], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
         const m = new RegExp(`^\\s*${name}\\s+REG_SZ\\s+(.*)$`, 'm').exec(out);
         return m ? m[1].trim() : null;
       } catch {
@@ -401,7 +402,7 @@ function registryValue(key, name) {
     flushSync() {
       if (!writing && next === null) return;
       next = null;
-      try { execFileSync('reg.exe', args(last), { windowsHide: true, stdio: 'ignore' }); } catch { /* checked on the next start */ }
+      try { execFileSync(REG, args(last), { windowsHide: true, stdio: 'ignore' }); } catch { /* checked on the next start */ }
     },
   };
 }

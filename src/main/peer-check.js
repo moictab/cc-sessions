@@ -13,6 +13,7 @@
 // (when Windows tells both start times).
 
 const { spawn } = require('child_process');
+const { POWERSHELL } = require('./system-paths');
 
 const SOURCE = String.raw`
 using System;
@@ -99,7 +100,7 @@ const SCRIPT = [
 const TIMEOUT_MS = 3000;
 
 class PeerCheck {
-  constructor({ powershell = 'powershell.exe' } = {}) {
+  constructor({ powershell = POWERSHELL } = {}) {
     this.powershell = powershell;
     this.proc = null;
     this.ready = null; // a promise: the helper has compiled its class

@@ -24,6 +24,7 @@ const { userDataDir } = require('./user-data');
 const { AdminHost } = require('./admin');
 const { DecisionLog, registryValue } = require('./decision-log');
 const { PeerCheck } = require('./peer-check');
+const { REG, POWERSHELL } = require('./system-paths');
 
 // How Windows identifies the app (taskbar grouping, notifications, Start menu).
 const AUMID = 'com.moictab.ccsessions';
@@ -154,7 +155,7 @@ function fixToastActivator() {
     toastActivatorTimer = null;
     const key = `HKCU\\Software\\Classes\\CLSID\\${TOAST_CLSID}\\LocalServer32`;
     const command = `"${process.execPath}" "${app.getAppPath()}"`;
-    execFile('reg.exe', ['add', key, '/ve', '/d', command, '/f'], { windowsHide: true }, (err) => {
+    execFile(REG, ['add', key, '/ve', '/d', command, '/f'], { windowsHide: true }, (err) => {
       if (err) console.error('[notification] could not register the toast activator', err);
     });
   }, 2000);
@@ -321,7 +322,7 @@ function startExitWatchdog() {
     `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
     `if ($p -and $p.ProcessName -eq '${name.replace(/'/g, "''")}' -and $p.StartTime -lt $t) { Stop-Process -Id ${pid} -Force }`;
   try {
-    spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    spawn(POWERSHELL, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
       { stdio: 'ignore', windowsHide: true }).unref();
   } catch (err) {
     console.error('[quit] could not start the exit watchdog', err);
