@@ -27,7 +27,8 @@ contextBridge.exposeInMainWorld('ccsm', {
   setSessionMeta: (id, patch) => ipcRenderer.invoke('session:set-meta', id, patch),
   saveGroups: (groups) => ipcRenderer.send('ui:groups', groups),
   clearInterrupted: (id) => ipcRenderer.invoke('session:clear-interrupted', id),
-  replyTo: (id, text, key) => ipcRenderer.invoke('inbox:reply', id, text, key),
+  // meta: { via: 'button' | 'inbox', decisionId }: how the card was answered, and which card was read.
+  replyTo: (id, text, key, meta) => ipcRenderer.invoke('inbox:reply', id, text, key, meta),
   dismissWaiting: (id, key) => ipcRenderer.invoke('inbox:dismiss', id, key),
   inboxContext: (id) => ipcRenderer.invoke('inbox:context', id),
   write: (id, data) => ipcRenderer.send('pty:write', id, data),

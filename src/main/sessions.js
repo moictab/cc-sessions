@@ -23,6 +23,7 @@ const { restartNote } = require('./restart-note');
 const { adminContext } = require('./admin');
 const { repliesSinceUser } = require('./claude-history');
 const reminders = require('./reminders');
+const { cardHash, normFolder, LIMITS: DECISION_LIMITS } = require('./decision-log');
 const i18n = require('../shared/i18n');
 
 const ATTENTION = new Set(['permission', 'input', 'done']);
@@ -48,9 +49,17 @@ const NOTICE_RETRY_MS = 30 * 1000;
 class SessionManager extends EventEmitter {
   /** `t(key, vars)` translates into the interface language of the moment (see shared/i18n.js). */
   /** `admin`: an AdminHost (admin.js), for the sessions that run as administrator. */
-  constructor({ claudePath, hooks, settingsDir, t, admin = null }) {
+  /**
+   * `decisions`: the DecisionLog (decision-log.js) that ask_user's decisions and their answers go in;
+   * `peers`: a PeerCheck (peer-check.js), which tells whether a connection comes from a session's
+   * own processes; `auditors()`: the project folders that may read every decision (settings.json).
+   */
+  constructor({ claudePath, hooks, settingsDir, t, admin = null, decisions = null, peers = null, auditors = () => [] }) {
     super();
     this.admin = admin;
+    this.decisions = decisions;
+    this.peers = peers;
+    this.auditors = auditors;
     this.t = typeof t === 'function' ? t : i18n.create(i18n.DEFAULT_LANGUAGE);
     this.claudePath = claudePath;
     this.hooks = hooks;
@@ -193,6 +202,7 @@ class SessionManager extends EventEmitter {
     if (!s.asks.length && s.waitingSince && s.fullReply) {
       s.asks = findAsks(s.fullReply).map((a) => ({ ...a, since: s.waitingSince }));
     }
+    this.checkRestoredDecisions(s);
     // Reminders whose time came while the app wasn't running: they go in as soon as they can, late.
     const now = Date.now();
     for (const r of s.reminders) if (!r.due && r.at <= now) { r.due = true; r.closed = true; }
@@ -342,6 +352,7 @@ class SessionManager extends EventEmitter {
   remove(id) {
     const s = this.sessions.get(id);
     if (!s) return;
+    this.closeDecisions(s.asks, 'closed');
     const proc = s.pty;
     s.pty = null;
     if (proc) { try { proc.kill(); } catch { /* already gone */ } }
@@ -465,7 +476,10 @@ class SessionManager extends EventEmitter {
     const s = this.sessions.get(terminalId);
     if (!s || !p || typeof p !== 'object') return null;
 
-    if (p.session_id && p.session_id !== s.claudeSessionId) {
+    // Which conversation it resumes on its next start: only from the two events whose origin main.js
+    // checks (they come from the session's own processes; see peer-check.js).
+    const checked = p.hook_event_name === 'SessionStart' || p.hook_event_name === 'UserPromptSubmit';
+    if (checked && p.session_id && p.session_id !== s.claudeSessionId) {
       s.claudeSessionId = p.session_id; // e.g. after /clear
       this.emit('persist');
     }
@@ -592,6 +606,7 @@ class SessionManager extends EventEmitter {
 
   clearWaiting(s) {
     if (!s.waitingSince && !s.asks.length) return;
+    this.closeDecisions(s.asks, 'cleared');
     s.waitingSince = null;
     s.asks = [];
     s.inboxReplies = [];
@@ -612,6 +627,7 @@ class SessionManager extends EventEmitter {
     const before = new Map(s.asks.map((a) => [a.key, a]));
     const keys = new Set(found.map((a) => a.key));
     const kept = complete ? s.asks.filter((a) => a.tool) : s.asks.filter((a) => !keys.has(a.key));
+    const previous = s.asks;
     s.asks = kept.concat(found.map((a) => {
       const was = before.get(a.key);
       if (!was) return { summary: '', options: [], fallback: '', context: '', ...a, since };
@@ -626,6 +642,7 @@ class SessionManager extends EventEmitter {
         since: was.since,
       };
     })).slice(-30);
+    this.closeDecisions(previous.filter((a) => !s.asks.includes(a)), 'dropped');
     s.asksFrom = from;
     // Numbers it used in text count too: a decision raised next with ask_user gets the one after.
     for (const a of found) {
@@ -651,16 +668,39 @@ class SessionManager extends EventEmitter {
     if (!was && s.toolAsksTurn >= TOOL_ASKS_PER_TURN) {
       return { ok: false, error: `Not registered: at most ${TOOL_ASKS_PER_TURN} new decisions per turn. Keep the most important ones open and raise the rest later.` };
     }
+    const actions = [];
+    for (const a of d.actions || []) {
+      const folder = this.agentFolder(a.agent);
+      if (folder.error) return { ok: false, error: `Not registered: action ${actions.length + 1}: ${folder.error}` };
+      actions.push({ agent: a.agent, folder: folder.value, action: a.action, ref: a.ref || '' });
+    }
     const ask = {
       ...toAsk(`${label}: ${d.question}`),
+      question: d.question,
       summary: d.summary,
       options: d.options,
       fallback: d.fallback,
       context: d.context,
-      since: was ? was.since : Date.now(),
+      actions,
+      uses: d.uses || 1,
+      since: Date.now(),
       tool: true,
     };
-    s.asks = was ? s.asks.map((a) => (a === was ? ask : a)) : s.asks.concat(ask).slice(-30);
+    // An open one with the same label isn't changed in place: it is withdrawn, and this is a card of
+    // its own, with its own id, which says what it replaces.
+    if (was) ask.replaces = was.decisionId || was.label;
+    if (this.decisions) {
+      try {
+        Object.assign(ask, { decisionId: this.decisions.raise(s, cardOf(ask)).id });
+      } catch (err) {
+        console.error('[decisions] could not record a decision', err);
+        return { ok: false, error: 'Not registered: CC Sessions could not write its record of decisions. Tell the user.' };
+      }
+    }
+    if (was) this.closeDecisions([was], 'replaced');
+    s.asks = was ? s.asks.map((a) => (a === was ? ask : a)) : s.asks.concat(ask);
+    this.closeDecisions(s.asks.slice(0, -30), 'dropped');
+    s.asks = s.asks.slice(-30);
     if (!was) s.toolAsksTurn++;
     const n = /^D(\d{1,2})$/.exec(label);
     if (n) s.askSeq = Math.max(s.askSeq, Number(n[1]));
@@ -668,7 +708,65 @@ class SessionManager extends EventEmitter {
     if (!s.waitingSince) s.waitingSince = ask.since; // asking makes it the user's turn
     this.emit('update', this.view(s));
     this.emit('persist');
-    return { ok: true, label, updated: !!was, open: s.asks.map(askName) };
+    return { ok: true, label, id: ask.decisionId || null, replaced: was ? ask.replaces : null, open: s.asks.map(askName) };
+  }
+
+  /**
+   * The project folder of an agent named in a decision's actions: given as a folder, or as the name
+   * of a session open in the app (only one, or all in the same folder). { value } or { error }.
+   */
+  agentFolder(agent) {
+    const a = String(agent || '').trim();
+    if (/^[A-Za-z]:[\\/]/.test(a)) return { value: path.win32.resolve(a).replace(/[\\/]+$/, '') };
+    const named = [...this.sessions.values()].filter((x) => x.name.toLowerCase() === a.toLowerCase());
+    const folders = [...new Set(named.map((x) => normFolder(x.cwd)))];
+    if (folders.length === 1) return { value: named[0].cwd };
+    if (!folders.length) {
+      const names = [...this.sessions.values()].map((x) => x.name).sort().join(', ');
+      return { error: `there is no session named "${a}" in CC Sessions; give its project folder instead (sessions open now: ${names})` };
+    }
+    return { error: `several sessions are named "${a}", in different folders (${named.map((x) => x.cwd).join('; ')}); give its project folder instead` };
+  }
+
+  /** Decisions that leave the inbox unanswered: off the record too (it ignores those already closed). */
+  closeDecisions(asks, reason) {
+    if (!this.decisions) return;
+    for (const a of asks) {
+      if (!a.decisionId) continue;
+      try { this.decisions.close(a.decisionId, reason); } catch (err) { console.error('[decisions] could not record', err); }
+    }
+  }
+
+  /**
+   * A decision id read back from state.json stays only if the record has that decision still open,
+   * raised by this session, for this very card. Otherwise the card stays, but its answer can't be
+   * checked: state.json is a file anyone can edit.
+   */
+  checkRestoredDecisions(s) {
+    for (const a of s.asks) {
+      if (!a.decisionId) continue;
+      const x = this.decisions && this.decisions.get(a.decisionId);
+      if (x && x.trusted && x.status === 'open' && x.terminal === s.id && x.cardHash === cardHash(s.cwd, cardOf(a))) continue;
+      delete a.decisionId;
+    }
+  }
+
+  /**
+   * Whether a connection (`peer`: { clientPort, serverPort }) comes from this session's own
+   * processes: 'ok', 'bad' or 'unknown' (can't tell). See peer-check.js.
+   */
+  async peerOk(id, peer) {
+    const s = this.sessions.get(id);
+    if (!s || !this.peers) return 'unknown';
+    try { return await this.peers.from(peer, s.pid); } catch { return 'unknown'; }
+  }
+
+  /** The project folder a session works in, and whether it may read every decision. */
+  reader(id) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    const me = normFolder(s.cwd);
+    return { id: s.id, cwd: s.cwd, name: s.name, admin: s.admin, auditor: (this.auditors() || []).some((f) => normFolder(f) === me) };
   }
 
   /** The ask_user tool's way out: the session takes one of its open questions off the inbox. */
@@ -678,6 +776,7 @@ class SessionManager extends EventEmitter {
     const key = String(label || '').trim().toUpperCase();
     const ask = s.asks.find((a) => a.label && a.label.toUpperCase() === key);
     if (!ask) return { ok: false, open: s.asks.map(askName) };
+    this.closeDecisions([ask], 'resolved');
     s.asks = s.asks.filter((a) => a !== ask);
     this.emit('update', this.view(s));
     this.emit('persist');
@@ -706,6 +805,12 @@ class SessionManager extends EventEmitter {
     }
     const left = answered ? s.asks.filter((a) => !answered.has(a.key)) : [];
     if (!s.waitingSince && left.length === s.asks.length) return;
+    // Those answered from the inbox are in the record already (reply()); any other answer was typed
+    // in the session, which proves nothing: noted as that.
+    for (const a of s.asks) {
+      if (left.includes(a) || !a.decisionId || !this.decisions) continue;
+      try { this.decisions.answer(a.decisionId, { via: 'terminal' }); } catch (err) { console.error('[decisions] could not record', err); }
+    }
     s.asks = left;
     s.waitingSince = null;
     this.emit('update', this.view(s));
@@ -726,6 +831,7 @@ class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s) return;
     s.dismissedAt = Date.now();
+    this.closeDecisions(key ? s.asks.filter((a) => a.key === key) : s.asks, 'dismissed');
     if (key) {
       s.asks = s.asks.filter((a) => a.key !== key);
       this.emit('update', this.view(s));
@@ -762,16 +868,34 @@ class SessionManager extends EventEmitter {
    * answer them instead), nor while it starts. typeNote() doesn't press Enter if that changes
    * after the text went in. Line breaks go in as a paste when the terminal takes pastes (an Enter
    * would send the first line alone); otherwise they become spaces.
+   * `meta`: { via: 'button' | 'inbox', decisionId } from the card: how the user answered, and which
+   * card they were looking at. For a decision in the record, the answer goes in it from here, the
+   * app's own window, and the typed line carries its id: "D5 [D5-1a2b3c4d5e6f]: Sí".
    */
-  reply(id, text, key) {
+  reply(id, text, key, meta = {}) {
     const s = this.sessions.get(id);
     let body = String(text || '').replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim();
     if (!s || !body) return { ok: false };
     if (!s.pty || !(IDLE.has(s.status) || s.status === 'busy')) return { ok: false, error: this.t('inbox.notNow') };
     // With several questions open, say which one this answers: its label ("D5: …") or its topic.
     const ask = key ? s.asks.find((a) => a.key === key) : null;
-    // With several open, or numbered by the session (D1…), say which one this answers: "D1: Sí".
-    if (ask && (s.asks.length > 1 || ask.label)) body = `${askName(ask)}: ${body}`;
+    if (ask && ask.decisionId) {
+      // The card changed (the session raised it again) since the user read it: they read it again.
+      if (meta.decisionId !== ask.decisionId) return { ok: false, error: this.t('inbox.changed') };
+      let recorded = false;
+      try {
+        recorded = this.decisions.answer(ask.decisionId, { text: body, via: meta.via === 'button' ? 'button' : 'inbox', card: cardOf(ask), folder: s.cwd });
+      } catch (err) {
+        console.error('[decisions] could not record an answer', err);
+        return { ok: false, error: this.t('inbox.failed') };
+      }
+      // Answered already (the line is on its way), or no longer open: one answer per card.
+      if (!recorded) return { ok: false, error: this.t('inbox.answered') };
+      body = `${ask.label} [${ask.decisionId}]: ${body}`;
+    } else if (ask && (s.asks.length > 1 || ask.label)) {
+      // With several open, or numbered by the session (D1…), say which one this answers: "D1: Sí".
+      body = `${askName(ask)}: ${body}`;
+    }
     s.inboxReplies.push({ text: squash(body), key: ask ? ask.key : null });
     if (s.inboxReplies.length > 10) s.inboxReplies.shift();
     if (body.includes('\n')) body = s.bracketedPaste ? `\x1b[200~${body}\x1b[201~` : body.replace(/\s*\n\s*/g, ' ');
@@ -1009,7 +1133,7 @@ class SessionManager extends EventEmitter {
       return { ok: false, error: `Not scheduled: this session already has ${reminders.MAX_PENDING} pending reminders. Cancel one first (cancel_reminder).` };
     }
     s.reminderSeq = Math.min(s.reminderSeq + 1, 999999);
-    const r = { id: `R${s.reminderSeq}`, at, text, created: Date.now(), due: false, closed: false };
+    const r = { id: `R${s.reminderSeq}`, at, text, created: Date.now(), due: false, closed: false, by: { name: s.name, cwd: s.cwd } };
     s.reminders = s.reminders.concat(r).sort((x, y) => x.at - y.at);
     this.armReminders();
     this.emit('update', this.view(s));
@@ -1237,7 +1361,7 @@ class SessionManager extends EventEmitter {
       this.emit('update', this.view(s));
       return { ok: true, result: had ? 'cancelled' : 'unchanged' };
     }
-    const note = notify ? restartNote(this.t, { bySession: by === 'session', change, sessionNote }) : '';
+    const note = notify ? restartNote(this.t, { bySession: by === 'session', change, sessionNote, session: { name: s.name, cwd: s.cwd } }) : '';
     s.restartWhenIdle = { changes: pending, note };
     this.emit('update', this.view(s));
     if (by !== 'session' && IDLE.has(s.status)) {
@@ -1716,6 +1840,35 @@ function looseAsks(lines) {
   return asks.length >= 2 ? asks : [toAsk(question)];
 }
 
+/** What an ask_user decision has besides the rest, as state.json had it, made safe. */
+function toolFields(a) {
+  const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+  const out = {
+    question: str(a.question, 300),
+    actions: Array.isArray(a.actions) ? a.actions.filter((x) => x && typeof x.folder === 'string').slice(0, DECISION_LIMITS.actions).map((x) => ({
+      agent: str(x.agent, DECISION_LIMITS.agent), folder: str(x.folder, 300), action: str(x.action, DECISION_LIMITS.action), ref: str(x.ref, DECISION_LIMITS.ref),
+    })) : [],
+    uses: Number.isInteger(a.uses) && a.uses >= 1 && a.uses <= DECISION_LIMITS.uses ? a.uses : 1,
+  };
+  if (typeof a.decisionId === 'string' && /^[A-Z]{1,2}\d{1,2}-[0-9a-f]{12}$/.test(a.decisionId)) out.decisionId = a.decisionId;
+  if (typeof a.replaces === 'string' && a.replaces) out.replaces = a.replaces.slice(0, 40);
+  return out;
+}
+
+/** A decision card as the record hashes it (decision-log.js, cardHash()): every field the inbox shows. */
+function cardOf(a) {
+  return {
+    label: a.label,
+    question: a.question || '',
+    summary: a.summary || '',
+    options: a.options || [],
+    fallback: a.fallback || '',
+    context: a.context || '',
+    actions: a.actions || [],
+    uses: a.uses || 1,
+  };
+}
+
 /** Asks saved by this version, or the one decision an earlier one saved (a block's items, one per line). */
 function cleanAsks(asks, decision) {
   const when = (n) => (Number(n) > 0 ? Number(n) : Date.now());
@@ -1728,7 +1881,7 @@ function cleanAsks(asks, decision) {
       fallback: str(a.fallback, 400),
       context: str(a.context, 5000),
       since: when(a.since),
-      ...(a.tool ? { tool: true } : {}), // raised with ask_user
+      ...(a.tool ? { tool: true, ...toolFields(a) } : {}), // raised with ask_user
     })));
   }
   if (decision && typeof decision.text === 'string' && decision.text) {

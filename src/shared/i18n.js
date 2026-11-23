@@ -128,6 +128,15 @@
       'inbox.otherAnswer': 'Another answer…',
       'inbox.ifNoAnswer': 'If you don’t answer: {text}',
       'inbox.failed': 'Couldn’t send it.',
+      'inbox.changed': 'The session changed this card while you were reading it. Read it again before you answer.',
+      'inbox.answered': 'This card is already answered.',
+      'inbox.actions': 'An answer covers, for 7 days:',
+      'inbox.actionsOnce': 'each of these once',
+      'inbox.actionsTimes': 'each of these {n} times',
+      'inbox.noActionsOnce': 'An answer covers the session that asks, once, for 7 days.',
+      'inbox.noActionsTimes': 'An answer covers the session that asks, {n} times, for 7 days.',
+      'inbox.replaces': 'Replaces an earlier {label}, withdrawn ({id}).',
+      'inbox.decisionId': 'Record: {id}',
       'inbox.open': 'Open session',
       'inbox.dismiss': 'Discard',
       'inbox.dismissTitle': 'Take it off the list without answering',
@@ -176,7 +185,7 @@
       'restartNote.why': ' to {change}',
       'restartNote.bySession': '[CC Sessions] Session restarted{why}, as you asked. The restart closed any background tasks ' +
         'you had running ({lost}): relaunch the ones that are still needed and carry on with what you were doing.',
-      'restartNote.ownNote': ' Your note before the restart: “{note}”',
+      'restartNote.ownNote': ' Note before the restart, from the session that asked for it (“{name}”, project folder {folder}): “{note}”',
       'restartNote.byUser': '[CC Sessions] The user restarted this session{why}. The restart closed any background tasks ' +
         'you had running ({lost}). If there were any, tell the user which ones they were and ask whether they want them ' +
         'relaunched; if there were none, just reply “ok”.',
@@ -544,6 +553,15 @@
       'inbox.otherAnswer': 'Otra respuesta…',
       'inbox.ifNoAnswer': 'Si no contestas: {text}',
       'inbox.failed': 'No se ha podido enviar.',
+      'inbox.changed': 'La sesión ha cambiado esta tarjeta mientras la leías. Vuelve a leerla antes de contestar.',
+      'inbox.answered': 'Esta tarjeta ya está contestada.',
+      'inbox.actions': 'Una respuesta cubre, durante 7 días:',
+      'inbox.actionsOnce': 'cada una de estas, una vez',
+      'inbox.actionsTimes': 'cada una de estas, {n} veces',
+      'inbox.noActionsOnce': 'Una respuesta cubre a la sesión que pregunta, una vez, durante 7 días.',
+      'inbox.noActionsTimes': 'Una respuesta cubre a la sesión que pregunta, {n} veces, durante 7 días.',
+      'inbox.replaces': 'Sustituye a una {label} anterior, retirada ({id}).',
+      'inbox.decisionId': 'Registro: {id}',
       'inbox.open': 'Abrir sesión',
       'inbox.dismiss': 'Descartar',
       'inbox.dismissTitle': 'Quitarla de la lista sin contestar',
@@ -590,7 +608,7 @@
       'restartNote.why': ' para {change}',
       'restartNote.bySession': '[CC Sessions] Sesión reiniciada{why}, como pediste. El reinicio cerró las tareas en segundo plano ' +
         'que tuvieras en marcha ({lost}): relanza las que sigan haciendo falta y continúa con lo que estabas haciendo.',
-      'restartNote.ownNote': ' Tu nota antes del reinicio: «{note}»',
+      'restartNote.ownNote': ' Nota antes del reinicio, de la sesión que lo pidió («{name}», carpeta {folder}): «{note}»',
       'restartNote.byUser': '[CC Sessions] El usuario ha reiniciado esta sesión{why}. El reinicio cerró las tareas en segundo plano ' +
         'que tuvieras en marcha ({lost}). Si había alguna, dile cuáles eran y pregúntale si quiere ' +
         'relanzarlas; si no había ninguna, responde solo «ok».',

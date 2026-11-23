@@ -13,7 +13,7 @@ Con varios agentes de Claude Code a la vez, lo difícil es saber cuál te espera
 ## Lo mejor
 
 - **Estado en vivo de cada sesión.** Trabajando, Necesita permiso (con el comando), Te pregunta (con la pregunta), Necesita tu decisión, Tu turno. Las que te necesitan suben arriba. Con la ventana en segundo plano te llega además una notificación de Windows y parpadea la barra de tareas.
-- **Una bandeja con todo lo que espera de ti** (`Ctrl+Shift+I`). Permisos, preguntas y decisiones, de la más antigua a la más nueva, cada una con cuánto lleva esperando y su contexto. Las tarjetas de decisión traen un botón por opción, y un clic escribe la respuesta en la sesión. Las sesiones las plantean con la herramienta `ask_user` de la app, o como tarjeta en su mensaje.
+- **Una bandeja con todo lo que espera de ti** (`Ctrl+Shift+I`). Permisos, preguntas y decisiones, de la más antigua a la más nueva, cada una con cuánto lleva esperando y su contexto. Las tarjetas de decisión traen un botón por opción, y un clic escribe la respuesta en la sesión. Las sesiones las plantean con la herramienta `ask_user` de la app, o como tarjeta en su mensaje. Con `get_decision`, otra sesión puede comprobar en el registro firmado de la app lo que contestaste, en vez de volver a preguntártelo.
 - **Sigues donde lo dejaste.** Las sesiones, los grupos, la vista y la posición de la ventana se guardan continuamente. Al volver a abrir, cada conversación se retoma con `claude --resume`, y una sesión cortada a mitad de turno ofrece el botón «Pedir que continúe».
 - **Pensada para muchas sesiones.** Vista individual o en cuadrícula, grupos, insignias de color, buscador rápido (`Ctrl+Shift+K`), «ir a la siguiente que me necesita» (`Ctrl+Shift+J`) y las sesiones que tienes abiertas en otras terminales.
 - **Mensajes entre sesiones.** Un panel muestra lo que tus agentes se dicen con `SendMessage` y si ya lo han leído. Necesita Claude Code 2.1.234 o posterior.
@@ -90,7 +90,7 @@ Si tienes el servidor MCP cc-sessions, plantea la decisión con su herramienta a
 - **Estado:** cada sesión se lanza con su propio fichero `--settings`, que añade hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`). Los hooks informan a un servidor HTTP en `127.0.0.1`, con puerto aleatorio y un token por arranque.
 - **Respaldo:** el registro de sesiones de Claude Code (`~/.claude/sessions`) corrige los hooks perdidos y muestra las sesiones abiertas fuera de la app.
 - **Bandeja:** un pequeño analizador lee las tarjetas de decisión del último mensaje de cada turno. Para los turnos que terminaron con la app cerrada, las busca en la transcripción.
-- **Servidor MCP:** el mismo servidor local da a las sesiones herramientas propias de la app: `ask_user` y `resolve_decision` para la bandeja, `schedule_reminder` (con `list_reminders` y `cancel_reminder`) y `set_plugin`.
+- **Servidor MCP:** el mismo servidor local da a las sesiones herramientas propias de la app: `ask_user` y `resolve_decision` para la bandeja, `get_decision` y `use_decision` para comprobar una respuesta y actuar con ella, `schedule_reminder` (con `list_reminders` y `cancel_reminder`) y `set_plugin`.
 
 La [guía completa](docs/guia.md) explica cada función, todos los atajos y cómo funciona por dentro, incluido el modelo de seguridad del auxiliar de administrador.
 

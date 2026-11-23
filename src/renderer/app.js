@@ -2236,8 +2236,9 @@
       // The rule's format: the question, its summary, what happens without an answer, one button per option.
       c.q = el('div', 'ib-q');
       c.fallback = el('div', 'ib-fallback');
+      c.acts = el('div', 'ib-acts'); // what an answer covers, for a decision in the app's record
       c.opts = el('div', 'ib-opts');
-      c.li.append(c.q, c.text, c.fallback, c.opts);
+      c.li.append(c.q, c.text, c.acts, c.fallback, c.opts);
     } else {
       c.li.appendChild(c.text);
     }
@@ -2340,6 +2341,7 @@
     c.q.hidden = !structured;
     c.fallback.textContent = ask.fallback ? t('inbox.ifNoAnswer', { text: ask.fallback }) : '';
     c.fallback.hidden = !ask.fallback;
+    fillActions(c, ask);
     const key = JSON.stringify(options);
     if (c.optsKey !== key) {
       c.optsKey = key;
@@ -2353,6 +2355,41 @@
     c.opts.hidden = !options.length;
     c.ta.placeholder = t(options.length ? 'inbox.otherAnswer' : 'inbox.placeholder');
     return structured ? ask.summary || '' : question;
+  }
+
+  /**
+   * For a decision in the app's record (raised with ask_user): what an answer lets be done, by whom
+   * (with its folder) and how many times; what it replaces, if it does; and its id, the one the
+   * answer carries into the session.
+   */
+  function fillActions(c, ask) {
+    const key = JSON.stringify([ask.decisionId, ask.actions, ask.uses, ask.replaces]);
+    if (c.actsKey === key) return;
+    c.actsKey = key;
+    const parts = [];
+    if (ask.decisionId) {
+      const uses = ask.uses || 1;
+      const acts = ask.actions || [];
+      if (acts.length) {
+        parts.push(el('div', 'ib-acts-head', `${t('inbox.actions')} ${uses === 1 ? t('inbox.actionsOnce') : t('inbox.actionsTimes', { n: uses })}`));
+        const list = el('ol', 'ib-acts-list');
+        for (const a of acts) {
+          const li = el('li');
+          // Named by its folder: once is enough.
+          const byFolder = a.agent.replace(/[\\/]+$/, '').toLowerCase() === a.folder.toLowerCase();
+          li.append(el('strong', null, byFolder ? a.folder : a.agent), `${byFolder ? '' : ` (${a.folder})`}: ${a.action}`);
+          if (a.ref) li.append(' · ', el('code', null, a.ref));
+          list.appendChild(li);
+        }
+        parts.push(list);
+      } else {
+        parts.push(el('div', 'ib-acts-head', uses === 1 ? t('inbox.noActionsOnce') : t('inbox.noActionsTimes', { n: uses })));
+      }
+      if (ask.replaces) parts.push(el('div', 'ib-acts-note', t('inbox.replaces', { label: ask.label, id: ask.replaces })));
+      parts.push(el('div', 'ib-acts-id mono', t('inbox.decisionId', { id: ask.decisionId })));
+    }
+    c.acts.replaceChildren(...parts);
+    c.acts.hidden = !parts.length;
   }
 
   /**
@@ -2531,7 +2568,8 @@
     c.send.disabled = true;
     for (const b of c.opts.children) b.disabled = true;
     let r = null;
-    try { r = await api.replyTo(c.id, text, c.askKey); } catch { /* reported below */ }
+    const meta = { via: choice ? 'button' : 'inbox', decisionId: (c.ask && c.ask.decisionId) || null };
+    try { r = await api.replyTo(c.id, text, c.askKey, meta); } catch { /* reported below */ }
     if (r && r.ok) {
       if (!choice) c.ta.value = '';
       setInboxNote(c, choice ? t('inbox.sentChoice', { choice }) : t('inbox.sent'));

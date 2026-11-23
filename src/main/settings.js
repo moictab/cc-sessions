@@ -16,6 +16,7 @@ function normalize(data) {
   const u = section(data, 'ui');
   const a = section(data, 'alerts');
   const box = section(data, 'inbox');
+  const dec = section(data, 'decisions');
   const folder = typeof box.folder === 'string' ? box.folder.trim().replace(/\\+$/, '') : '';
   const minutes = Math.round(Number(a.afterMinutes));
   // The family ends up inside a CSS font list: keep it to a plain name.
@@ -40,6 +41,14 @@ function normalize(data) {
     },
     // The alert inbox (see alert-inbox.js): the folder system tasks leave notices in, the session
     // that gets them, and the kinds of notice it accepts. Off until all three are set.
+    // The record of decisions (decision-log.js): the project folders of the sessions that may read
+    // every decision with get_decision, whoever raised it and whatever its state (the security one).
+    decisions: {
+      auditors: Array.isArray(dec.auditors)
+        ? [...new Set(dec.auditors.filter((f) => typeof f === 'string' && /^[A-Za-z]:\\[^<>"|?*\x00-\x1f]*$/.test(f.trim()) && f.trim().length <= 240)
+          .map((f) => f.trim().replace(/\\+$/, '')))].slice(0, 5)
+        : [],
+    },
     inbox: {
       folder: /^[A-Za-z]:\\[^<>"|?*\x00-\x1f]*$/.test(folder) && folder.length <= 240 ? folder : null,
       session: typeof box.session === 'string' && box.session.trim() ? box.session.trim().slice(0, 64) : null,
@@ -75,6 +84,7 @@ class Settings {
       ui: { ...this.data.ui, ...section(patch, 'ui') },
       alerts: { ...this.data.alerts, ...section(patch, 'alerts') },
       inbox: { ...this.data.inbox, ...section(patch, 'inbox') },
+      decisions: { ...this.data.decisions, ...section(patch, 'decisions') },
     });
     this.save();
     return this.data;

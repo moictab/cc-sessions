@@ -3,8 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
-const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, screen, clipboard, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, screen, clipboard, powerMonitor, safeStorage } = require('electron');
 const { Store } = require('./store');
 const { startHookServer } = require('./hook-server');
 const { PhoneAlert } = require('./phone-alert');
@@ -21,6 +22,8 @@ const { restartNote } = require('./restart-note');
 const i18n = require('../shared/i18n');
 const { userDataDir } = require('./user-data');
 const { AdminHost } = require('./admin');
+const { DecisionLog, registryValue } = require('./decision-log');
+const { PeerCheck } = require('./peer-check');
 
 // How Windows identifies the app (taskbar grouping, notifications, Start menu).
 const AUMID = 'com.moictab.ccsessions';
@@ -48,6 +51,8 @@ let registry = null;
 let hooks = null;
 let messages = null;
 let admin = null;
+let peers = null; // who opened a connection to the hook server (peer-check.js)
+let decisionsRegistry = null; // the copy of the decision record's head under HKCU (decision-log.js)
 let activeId = null;
 let allowClose = false;
 const liveNotifications = new Set();
@@ -362,7 +367,10 @@ function registerIpc() {
   ipcMain.handle('session:rename', (_e, id, name) => manager.rename(id, name));
   ipcMain.handle('session:clear-interrupted', (_e, id) => manager.clearInterrupted(id));
   // The inbox: the user's answer to a session waiting for them, or taking it off the list.
-  ipcMain.handle('inbox:reply', (_e, id, text, key) => manager.reply(id, text, typeof key === 'string' ? key : null));
+  ipcMain.handle('inbox:reply', (_e, id, text, key, meta) => manager.reply(id, text, typeof key === 'string' ? key : null, {
+    via: meta && meta.via === 'button' ? 'button' : 'inbox',
+    decisionId: meta && typeof meta.decisionId === 'string' ? meta.decisionId : null,
+  }));
   ipcMain.handle('inbox:dismiss', (_e, id, key) => manager.dismissWaiting(id, typeof key === 'string' ? key : null));
   ipcMain.handle('inbox:context', (_e, id) => manager.context(id));
   ipcMain.on('pty:write', (_e, id, data) => manager.write(id, data));
@@ -430,15 +438,45 @@ async function boot() {
   store = new Store(app.getPath('userData'));
   const hookLog = process.env.CC_SESSIONS_HOOK_LOG; // debugging aid: dump every hook payload
   let mcp = null;
-  hooks = await startHookServer((terminalId, payload) => {
+  // Who opened a connection to the hook server (peer-check.js), for the calls that need it.
+  peers = new PeerCheck();
+  peers.start();
+  // The record of decisions and their answers (decision-log.js). Its key is kept encrypted for this
+  // Windows user; the copy of its head, under HKCU, one value per data folder (tests use their own).
+  const decisionsDir = path.join(app.getPath('userData'), 'decisions');
+  decisionsRegistry = registryValue('HKCU\\Software\\cc-sessions\\decisions',
+    `Head-${crypto.createHash('sha256').update(decisionsDir.toLowerCase()).digest('hex').slice(0, 12)}`);
+  let decisions = null;
+  try {
+    const encrypted = safeStorage.isEncryptionAvailable();
+    if (!encrypted) console.error('[decisions] safeStorage is not available: the key is kept unencrypted');
+    decisions = new DecisionLog({
+      dir: decisionsDir,
+      protect: (text) => (encrypted ? safeStorage.encryptString(text) : Buffer.from(text, 'utf8')),
+      unprotect: (buf) => (encrypted ? safeStorage.decryptString(buf) : buf.toString('utf8')),
+      registry: decisionsRegistry,
+    });
+  } catch (err) {
+    console.error('[decisions] the record could not be opened: decisions go without one', err);
+  }
+  hooks = await startHookServer(async (terminalId, payload, peer) => {
     if (hookLog) {
       try { fs.appendFileSync(hookLog, JSON.stringify({ at: Date.now(), terminalId, payload }) + '\n'); } catch { /* ignore */ }
+    }
+    // These two close cards, and hand over reminders and alerts: only from the session's own processes.
+    if (manager && payload && (payload.hook_event_name === 'UserPromptSubmit' || payload.hook_event_name === 'SessionStart')) {
+      const from = await manager.peerOk(terminalId, peer);
+      if (from === 'bad') {
+        console.warn(`[hook] ${payload.hook_event_name} for session ${terminalId} came from a process outside it: ignored`);
+        return null;
+      }
+      if (from === 'unknown') console.warn(`[hook] could not tell where ${payload.hook_event_name} for session ${terminalId} came from`);
     }
     const out = manager ? manager.handleHook(terminalId, payload) : null; // what the hook prints back, if anything
     if (messages) messages.handleHook(terminalId, payload);
     return out;
   }, {
-    onMcp: (terminalId, msg) => (mcp ? mcp(terminalId, msg) : null),
+    onMcp: (terminalId, msg, peer) => (mcp ? mcp(terminalId, msg, peer) : null),
     onGuard: (terminalId, body) => { if (manager) manager.guardNotice(terminalId, body); },
   });
   // CC_SESSIONS_ADMIN_NO_ELEVATE: tests only, administrator sessions go through the helper
@@ -457,6 +495,9 @@ async function boot() {
     settingsDir: path.join(app.getPath('userData'), 'session-settings'),
     t,
     admin,
+    decisions,
+    peers,
+    auditors: () => settings.get().decisions.auditors,
   });
   mcp = createMcpHandler({ manager, version: app.getVersion() });
   messages = new MessageLog(
@@ -516,6 +557,8 @@ app.on('second-instance', (_e, _argv, _cwd, data) => {
 
 app.on('window-all-closed', () => {
   if (hooks) hooks.close();
+  if (peers) peers.stop();
+  if (decisionsRegistry) decisionsRegistry.flushSync();
   app.quit();
 });
 

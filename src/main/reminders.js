@@ -89,6 +89,8 @@ function cleanReminders(list) {
       created: Number.isFinite(r.created) ? r.created : r.at,
       due: !!r.due, // its time came while the app was running
       closed: !!r.closed, // its time came while the app wasn't running
+      // The session that scheduled it (its name then, and its folder), said when it comes back.
+      ...(r.by && typeof r.by.cwd === 'string' ? { by: { name: String(r.by.name || '').slice(0, 80), cwd: r.by.cwd.slice(0, 300) } } : {}),
     }))
     .sort((x, y) => x.at - y.at)
     .slice(0, MAX_PENDING);
@@ -119,7 +121,8 @@ function reminderContext(list, now = Date.now()) {
         ? ` It arrives late (${span(now - r.at)}): CC Sessions was not running when it was due.`
         : ` It arrives late (${span(now - r.at)}): until now the session was busy, waiting on something or not running.`;
     }
-    return `${r.id}, scheduled on ${localTime(r.created)} for ${localTime(r.at)}.${late} Its text:\n${r.text}`;
+    const by = r.by ? ` by the session “${r.by.name}” (project folder ${r.by.cwd})` : '';
+    return `${r.id}, scheduled${by} on ${localTime(r.created)} for ${localTime(r.at)}.${late} Its text:\n${r.text}`;
   });
   return [
     head,

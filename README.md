@@ -13,7 +13,7 @@ When you run several Claude Code agents at once, most of the work is noticing wh
 ## Highlights
 
 - **Live status for every session.** Working, Needs permission (with the command), Asking you (with the question), Needs your decision, Your turn. Sessions that need you jump to the top. When the window is in the background you also get a Windows notification and a flashing taskbar button.
-- **One inbox for everything waiting on you** (`Ctrl+Shift+I`). Permissions, questions and decisions, oldest first, each with how long it has waited and its context. Decision cards come with one button per option, and a click types the answer into the session. Sessions raise them with the app's `ask_user` tool, or as a card in their message.
+- **One inbox for everything waiting on you** (`Ctrl+Shift+I`). Permissions, questions and decisions, oldest first, each with how long it has waited and its context. Decision cards come with one button per option, and a click types the answer into the session. Sessions raise them with the app's `ask_user` tool, or as a card in their message. With `get_decision`, another session can check in the app's signed record what you answered, instead of asking you again.
 - **Pick up where you left off.** Sessions, groups, layout and window position are saved continuously. On the next start every conversation resumes with `claude --resume`, and a session cut off mid-turn gets an "Ask it to continue" button.
 - **Built for many sessions.** Single or grid view, groups, colored badges, a quick switcher (`Ctrl+Shift+K`), "go to the next one that needs me" (`Ctrl+Shift+J`), and the sessions you have open in other terminals.
 - **Messages between sessions.** A panel shows what your agents tell each other with `SendMessage`, and whether it has been read. It needs Claude Code 2.1.234 or later.
@@ -90,7 +90,7 @@ If you have the cc-sessions MCP server, raise the decision with its ask_user too
 - **Status:** each session is launched with its own `--settings` file that adds hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`). The hooks report to an HTTP server on `127.0.0.1`, on a random port and with a per-run token.
 - **Fallback:** Claude Code's session registry (`~/.claude/sessions`) corrects missed hooks and shows sessions running outside the app.
 - **Inbox:** a small parser reads decision cards out of each turn's last message, and out of the transcript for turns that ended while the app was closed.
-- **MCP server:** the same local server gives sessions the app's own tools: `ask_user` and `resolve_decision` for the inbox, `schedule_reminder` (with `list_reminders` and `cancel_reminder`), and `set_plugin`.
+- **MCP server:** the same local server gives sessions the app's own tools: `ask_user` and `resolve_decision` for the inbox, `get_decision` and `use_decision` to check an answer and act on it, `schedule_reminder` (with `list_reminders` and `cancel_reminder`), and `set_plugin`.
 
 The [full guide](docs/guide.md) covers every feature, every shortcut and the internals, including the administrator helper's security model.
 

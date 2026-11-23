@@ -9,13 +9,17 @@ function lostOnRestart(t) {
   return t('restartNote.lost');
 }
 
-function restartNote(t, { bySession, change, sessionNote }) {
+/**
+ * `session`: { name, cwd } of the session that asked for the restart (with set_plugin), named with
+ * its folder so that a note nobody wrote for it doesn't pass for its own.
+ */
+function restartNote(t, { bySession, change, sessionNote, session }) {
   const why = change ? t('restartNote.why', { change }) : '';
   const lost = lostOnRestart(t);
   if (bySession) {
     let text = t('restartNote.bySession', { why, lost });
     const own = String(sessionNote || '').replace(/\s+/g, ' ').trim().slice(0, 1500);
-    if (own) text += t('restartNote.ownNote', { note: own });
+    if (own) text += t('restartNote.ownNote', { note: own, name: (session && session.name) || '?', folder: (session && session.cwd) || '?' });
     return text;
   }
   return t('restartNote.byUser', { why, lost });

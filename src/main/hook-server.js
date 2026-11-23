@@ -36,8 +36,10 @@ function startHookServer(onEvent, { onMcp, onGuard } = {}) {
   const guardToken = crypto.randomBytes(16).toString('hex');
 
   const server = http.createServer((req, res) => {
+    // Which connection it came on, so the app can tell whose process opened it (peer-check.js).
+    const peer = { clientPort: req.socket.remotePort, serverPort: req.socket.localPort };
     const mcp = /^\/mcp\/([A-Za-z0-9-]+)$/.exec(req.url || '');
-    if (mcp && onMcp && tokenOk(mcp[1], req.headers['x-cc-sessions-token'])) return serveMcp(req, res, mcp[1], onMcp);
+    if (mcp && onMcp && tokenOk(mcp[1], req.headers['x-cc-sessions-token'])) return serveMcp(req, res, mcp[1], onMcp, peer);
     const guard = /^\/guard\/([A-Za-z0-9-]+)$/.exec(req.url || '');
     if (guard && onGuard && req.method === 'POST' && req.headers['x-cc-sessions-token'] === guardToken) {
       return serveGuard(req, res, guard[1], onGuard);
@@ -55,15 +57,15 @@ function startHookServer(onEvent, { onMcp, onGuard } = {}) {
       if (size > 4 * 1024 * 1024) req.destroy();
       else chunks.push(chunk);
     });
-    req.on('end', () => {
+    req.on('end', async () => {
       // The hook prints whatever we answer, and Claude reads a hook's output (as context, for
       // SessionStart and UserPromptSubmit). So: 204 with no body, unless the handler has
-      // something for this session to know (it returns the hook's JSON output).
+      // something for this session to know (it returns the hook's JSON output, or a promise of it).
       let payload = null;
       try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* ignored below */ }
       let out = null;
       if (payload) {
-        try { out = onEvent(match[1], payload) || null; } catch (err) { console.error('[hook] handler error', err); }
+        try { out = (await onEvent(match[1], payload, peer)) || null; } catch (err) { console.error('[hook] handler error', err); }
       }
       if (out) return sendJson(res, 200, out);
       res.writeHead(204);
@@ -95,7 +97,7 @@ function startHookServer(onEvent, { onMcp, onGuard } = {}) {
  * Streamable HTTP, the simple way: every request gets a plain JSON response, notifications
  * get 202, and there is no server-to-client stream (GET answers 405, as the spec allows).
  */
-function serveMcp(req, res, terminalId, onMcp) {
+function serveMcp(req, res, terminalId, onMcp, peer) {
   if (req.method !== 'POST') {
     res.writeHead(405, { Allow: 'POST' });
     res.end();
@@ -117,7 +119,7 @@ function serveMcp(req, res, terminalId, onMcp) {
     const out = [];
     for (const msg of batch ? body : [body]) {
       try {
-        const r = await onMcp(terminalId, msg);
+        const r = await onMcp(terminalId, msg, peer);
         if (r) out.push(r);
       } catch (err) {
         console.error('[mcp] handler error', err);
